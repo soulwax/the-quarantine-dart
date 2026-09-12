@@ -1,10 +1,5 @@
 #!/usr/bin/env dart
 
-/// Offline OBJ preflight for large authored assets.
-///
-/// This intentionally stops at inspection. It does not emit runtime geometry,
-/// because the legacy `obj_to_mesh.dart` path is capped for tiny fixtures and
-/// cannot provide tangent/LOD/package provenance for production assets.
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;

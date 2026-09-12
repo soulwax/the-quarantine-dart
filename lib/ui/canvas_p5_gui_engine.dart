@@ -5,6 +5,7 @@ import 'package:web/web.dart' as web;
 
 import 'p5_gui_models.dart';
 export 'p5_gui_models.dart';
+import 'gui_flow_coordinator.dart';
 import '../presentation/shader_tuning_state.dart';
 export '../presentation/shader_tuning_state.dart';
 
@@ -878,7 +879,7 @@ class CanvasP5GuiEngine {
   void drawContextualHUDActionPrompts({
     required double screenWidth,
     required double screenHeight,
-    required List<dynamic> hints,
+    required List<ContextualPromptHint> hints,
   }) {
     if (hints.isEmpty) return;
 

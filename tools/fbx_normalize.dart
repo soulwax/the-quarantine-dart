@@ -421,8 +421,10 @@ final class _Glb {
       throw const FormatException('GLB missing JSON or BIN chunk');
     }
     final primitives = <_Primitive>[];
-    for (final mesh in (json['meshes'] as List? ?? const []))
+    for (final mesh in (json['meshes'] as List? ?? const [])) {
+      if (mesh is! Map) continue;
       for (final p in (mesh['primitives'] as List? ?? const [])) {
+        if (p is! Map) continue;
         primitives.add(
           _Primitive(
             Map<String, dynamic>.from(p['attributes'] as Map),
@@ -431,6 +433,7 @@ final class _Glb {
           ),
         );
       }
+    }
     return _Glb(json, bin, primitives);
   }
 
@@ -457,7 +460,7 @@ final class _Glb {
             : 4);
     final out = <double>[];
     final v = ByteData.sublistView(bin);
-    for (var i = 0; i < count; i++)
+    for (var i = 0; i < count; i++) {
       for (var c = 0; c < components; c++) {
         final at =
             start +
@@ -476,6 +479,7 @@ final class _Glb {
               : v.getUint32(at, Endian.little).toDouble(),
         );
       }
+    }
     return _Accessor(out, count, components);
   }
 }

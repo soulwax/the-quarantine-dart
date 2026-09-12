@@ -34,6 +34,7 @@ class GuiFlowCoordinator {
   final double _transitionSpeed = 6.0;    // Smooth 160ms ease-out slide
 
   ActiveGuiPanel get currentPanel => _currentPanel;
+  ActiveGuiPanel get previousPanel => _previousPanel;
   bool get isPanelActive => _currentPanel != ActiveGuiPanel.none;
   double get transitionProgress => _transitionProgress;
 

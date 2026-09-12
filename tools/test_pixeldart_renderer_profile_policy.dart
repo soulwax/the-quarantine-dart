@@ -94,8 +94,8 @@ void main() {
       surfaceWidth: 0,
       surfaceHeight: 1080,
     );
-  } on ArgumentError {
-    rejected = true;
+  } catch (error) {
+    rejected = error is ArgumentError;
   }
   check(rejected, 'invalid surface dimensions are rejected');
   print('Pixeldart renderer profile policy: allocation/scale/validation pass');

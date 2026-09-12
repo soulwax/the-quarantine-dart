@@ -8,6 +8,9 @@ class P5DialogueMenu {
   double _silenceProgress = 0.0;
   bool _isSilenceActive = false;
 
+  double get elapsedTimeMs => _elapsedTimeMs;
+  bool get isSilenceActive => _isSilenceActive;
+
   P5DialogueMenu(this.guiEngine);
 
   void update(double dt, {bool silenceHovered = false}) {

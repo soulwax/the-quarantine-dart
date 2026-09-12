@@ -21,7 +21,7 @@ AuthoredEventConsumer authoredEventConsumerFor(String kind) => switch (kind) {
 class GameEventOrchestrator {
   GameEventOrchestrator(StoryScreenplay screenplay)
     : _events = List<ScreenplayEvent>.unmodifiable(
-        [...screenplay.events]..sort((a, b) {
+        <ScreenplayEvent>[...screenplay.events]..sort((a, b) {
           final day = a.day.compareTo(b.day);
           if (day != 0) return day;
           final hour = a.hour.compareTo(b.hour);
