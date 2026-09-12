@@ -17,85 +17,8 @@ enum BedroomProp {
 /// Class defining the bedroom furnishing manifest.
 class BedroomFurnishingManifest {
   /// All props with authored placements in the bedroom.
-  static const List<PropPlacement> props = [
-    PropPlacement(
-      propId: 'bedroom.bedstead',
-      displayName: 'Bedstead',
-      roomId: 'bedroom',
-      materialFamily: 'mat-iron-cast',
-      positionX: -0.8,
-      positionY: 0.5,
-      positionZ: 1.0,
-      rotationYDegrees: 0.0,
-      collisionRadiusM: 0.9,
-      collisionHeightM: 1.1,
-    ),
-    PropPlacement(
-      propId: 'bedroom.eiderdown',
-      displayName: 'Eiderdown',
-      roomId: 'bedroom',
-      materialFamily: 'mat-fabric-curtains',
-      positionX: -0.8,
-      positionY: 0.55,
-      positionZ: 1.0,
-      rotationYDegrees: 0.0,
-      collisionRadiusM: 0.85,
-      collisionHeightM: 0.2,
-      stateVariant: 'sss-translucent',
-    ),
-    PropPlacement(
-      propId: 'bedroom.wardrobe',
-      displayName: 'Wardrobe',
-      roomId: 'bedroom',
-      materialFamily: 'mat-wood-mahogany-dark',
-      positionX: 1.6,
-      positionY: 1.0,
-      positionZ: -1.2,
-      rotationYDegrees: -90.0,
-      collisionRadiusM: 0.45,
-      collisionHeightM: 2.0,
-      isInteractive: true,
-    ),
-    PropPlacement(
-      propId: 'bedroom.dressing-table',
-      displayName: 'Dressing Table',
-      roomId: 'bedroom',
-      materialFamily: 'mat-wood-mahogany-dark',
-      positionX: 1.6,
-      positionY: 0.8,
-      positionZ: 1.0,
-      rotationYDegrees: -90.0,
-      collisionRadiusM: 0.35,
-      collisionHeightM: 1.4,
-      isInteractive: true,
-      stateVariant: 'mirror-ssr-target',
-    ),
-    PropPlacement(
-      propId: 'bedroom.washstand',
-      displayName: 'Washstand',
-      roomId: 'bedroom',
-      materialFamily: 'mat-ceramic-glaze',
-      positionX: -1.8,
-      positionY: 0.8,
-      positionZ: -1.2,
-      rotationYDegrees: 90.0,
-      collisionRadiusM: 0.3,
-      collisionHeightM: 0.9,
-      isInteractive: true,
-    ),
-    PropPlacement(
-      propId: 'bedroom.rag-rug',
-      displayName: 'Rag Rug',
-      roomId: 'bedroom',
-      materialFamily: 'mat-fabric-curtains',
-      positionX: -0.8,
-      positionY: 0.01,
-      positionZ: -0.3,
-      rotationYDegrees: 0.0,
-      collisionRadiusM: 0.6,
-      collisionHeightM: 0.02,
-    ),
-  ];
+  /// Bedroom placements have been migrated to assets/house/placements.json (HA-03).
+  static const List<PropPlacement> props = [];
 
   /// Finds a prop placement by its unique ID.
   static PropPlacement? findProp(String propId) {

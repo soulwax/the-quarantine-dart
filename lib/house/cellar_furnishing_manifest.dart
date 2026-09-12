@@ -17,86 +17,8 @@ enum CellarProp {
 /// Class defining the cellar furnishing manifest.
 class CellarFurnishingManifest {
   /// All props with authored placements in the cellar.
-  static const List<PropPlacement> props = [
-    PropPlacement(
-      propId: 'cellar.coal-heap',
-      displayName: 'Coal Heap',
-      roomId: 'cellar',
-      materialFamily: 'mat-concrete-floor',
-      positionX: 1.5,
-      positionY: 0.3,
-      positionZ: 1.2,
-      rotationYDegrees: 0.0,
-      collisionRadiusM: 0.8,
-      collisionHeightM: 0.6,
-      stateVariant: 'dusty-coal',
-    ),
-    PropPlacement(
-      propId: 'cellar.preserving-jars',
-      displayName: 'Preserving Jars',
-      roomId: 'cellar',
-      materialFamily: 'mat-glass-clear-window',
-      positionX: -1.7,
-      positionY: 1.2,
-      positionZ: 0.0,
-      rotationYDegrees: 90.0,
-      collisionRadiusM: 0.25,
-      collisionHeightM: 0.3,
-      isInteractive: true,
-    ),
-    PropPlacement(
-      propId: 'cellar.mangle',
-      displayName: 'Mangle',
-      roomId: 'cellar',
-      materialFamily: 'mat-iron-cast',
-      positionX: 0.0,
-      positionY: 0.6,
-      positionZ: -1.5,
-      rotationYDegrees: 45.0,
-      collisionRadiusM: 0.4,
-      collisionHeightM: 1.2,
-      isInteractive: true,
-    ),
-    PropPlacement(
-      propId: 'cellar.bare-bulb',
-      displayName: 'Bare Bulb',
-      roomId: 'cellar',
-      materialFamily: 'mat-glass-clear-window',
-      positionX: 0.0,
-      positionY: 2.1,
-      positionZ: 0.0,
-      rotationYDegrees: 0.0,
-      collisionRadiusM: 0.1,
-      collisionHeightM: 0.25,
-      isInteractive: true,
-      stateVariant: 'pull-cord-switch',
-    ),
-    PropPlacement(
-      propId: 'cellar.ventilation-grille',
-      displayName: 'Ventilation Grille',
-      roomId: 'cellar',
-      materialFamily: 'mat-iron-cast',
-      positionX: -1.9,
-      positionY: 1.8,
-      positionZ: 1.2,
-      rotationYDegrees: 90.0,
-      collisionRadiusM: 0.2,
-      collisionHeightM: 0.2,
-    ),
-    PropPlacement(
-      propId: 'cellar.meter-cupboard',
-      displayName: 'Meter Cupboard',
-      roomId: 'cellar',
-      materialFamily: 'mat-wood-oak-polished',
-      positionX: 1.6,
-      positionY: 1.3,
-      positionZ: -1.4,
-      rotationYDegrees: -90.0,
-      collisionRadiusM: 0.25,
-      collisionHeightM: 0.6,
-      isInteractive: true,
-    ),
-  ];
+  /// Cellar placements have been migrated to assets/house/placements.json (HA-03).
+  static const List<PropPlacement> props = [];
 
   /// Finds a prop placement by its unique ID.
   static PropPlacement? findProp(String propId) {
