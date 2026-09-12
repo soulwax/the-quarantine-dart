@@ -8,7 +8,7 @@ import 'arch/mesh_builder.dart';
 import 'arch/profile_extruder.dart';
 import 'arch/roof_builder.dart';
 import 'arch/window_joinery_builder.dart';
-import 'arch/furnishing_scene_adapter.dart';
+import 'arch/architectural_scene_adapter.dart';
 import 'builders/attic_builder.dart';
 import 'collision.dart';
 import 'builders/bathroom_builder.dart';
@@ -336,7 +336,7 @@ class HouseAssembler {
     }
 
     // Add physical collision hulls for solid and interactive furnishings
-    hulls.addAll(FurnishingSceneAdapter.buildCollisionHulls(house));
+    hulls.addAll(ArchitecturalSceneAdapter.instance.buildCollisionHulls(house));
 
     return hulls;
   }

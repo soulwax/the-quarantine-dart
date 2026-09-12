@@ -47,7 +47,6 @@ import 'package:quarantine/house/geometry.dart';
 import 'package:quarantine/house/house.dart';
 import 'package:quarantine/house/house_assembler.dart';
 import 'package:quarantine/house/arch/architectural_scene_adapter.dart';
-import 'package:quarantine/house/arch/furnishing_scene_adapter.dart';
 import 'package:quarantine/house/inventory.dart';
 import 'package:quarantine/house/inventory_interaction.dart';
 import 'package:quarantine/presentation/model_package_index.dart';
@@ -704,7 +703,7 @@ final class _PixeldartWebRuntime implements RendererRuntime {
     );
     for (final room in house.rooms) {
       for (final window in room.windows) {
-        if (sparseTestChambers) continue;
+        if (!isRoomDressed(room.id)) continue;
         _addDecoration(
           room.id,
           _windowMesh(room, window),
@@ -862,38 +861,6 @@ final class _PixeldartWebRuntime implements RendererRuntime {
       _sceneItems.add(sceneItem);
     }
 
-    // Register 53 authored furnishing manifest props via FurnishingSceneAdapter
-    final furnishingItems = FurnishingSceneAdapter.buildFurnishings(house);
-    for (final item in furnishingItems) {
-      final mesh = _renderer.resources.registerMesh(
-        _meshFromVertices(item.meshVertices),
-        debugLabel: 'furnishing:${item.propId}',
-      );
-      _sceneMeshes.add(mesh);
-      final material = _materialForRoom(item.roomId);
-      final rotation = px.Quat.axisAngle(
-        const px.Vec3(0, 1, 0),
-        item.rotationYDegrees * math.pi / 180,
-      );
-      final descriptor = px.RetainedItemDescriptor(
-        mesh: mesh,
-        material: material,
-        transform: px.Transform(
-          translation: px.Vec3(
-            item.worldPosition.x,
-            item.worldPosition.y,
-            item.worldPosition.z,
-          ),
-          rotation: rotation,
-          scale: item.scaleUniform,
-        ),
-        visibilityMask: -1,
-        castsShadow: true,
-      );
-      final sceneItem = _world.addItem(descriptor);
-      _sceneItems.add(sceneItem);
-    }
-
     // Register authentic Victorian window joinery for all rooms with windows
     for (final room in house.rooms) {
       if (room.windows.isEmpty) continue;
@@ -948,13 +915,11 @@ final class _PixeldartWebRuntime implements RendererRuntime {
     _inventoryMeshes.clear();
     var promotedBoundsAligned = true;
     for (final placement in _inventoryPlacements) {
-      final assetKey = placement.assetId.toLowerCase();
-      if (sparseTestChambers && assetKey.contains('stair')) {
-        continue;
-      }
-      if (sparseTestChambers &&
-          placement.visibilityLayer != 'story' &&
-          placement.visibilityLayer != 'architecture') {
+      if (!_isInventoryPlacementRetained(
+        roomId: placement.roomId,
+        assetId: placement.assetId,
+        visibilityLayer: placement.visibilityLayer,
+      )) {
         continue;
       }
       final room = _houseForInventory?.byId(placement.roomId);
@@ -7401,6 +7366,21 @@ WeatherSurfaceSnapshot? _advanceWeatherSurface(
   );
 }
 
+bool _isInventoryPlacementRetained({
+  required String roomId,
+  required String assetId,
+  required String visibilityLayer,
+}) {
+  if (isRoomDressed(roomId)) return true;
+  if (sparseTestChambers) {
+    if (assetId.toLowerCase().contains('stair')) return false;
+    if (visibilityLayer != 'story' && visibilityLayer != 'architecture') {
+      return false;
+    }
+  }
+  return true;
+}
+
 /// The first authored collision surface for precipitation is the active
 /// room's floor. More detailed sills, awnings, and furniture boxes can be
 /// added from the same host-owned contract without changing Pixeldart.
@@ -7448,13 +7428,13 @@ List<WeatherCollisionBox> _weatherCollisionBoxesForRoom(
   // create invisible weather walls. Wall-mounted bounds are retained: they
   // provide a real shelter/impact surface without changing player collision.
   for (final placement in authoredInventory.placementsFor(room.id)) {
-    final assetKey = placement.assetId.toLowerCase();
     if ((placement.role == 'renderer-reference' &&
             !placement.physics.collision) ||
-        (sparseTestChambers &&
-            placement.visibilityLayer != 'story' &&
-            placement.visibilityLayer != 'architecture') ||
-        (sparseTestChambers && assetKey.contains('stair'))) {
+        !_isInventoryPlacementRetained(
+          roomId: placement.roomId,
+          assetId: placement.assetId,
+          visibilityLayer: placement.visibilityLayer,
+        )) {
       continue;
     }
     final asset = authoredInventory.assetFor(placement.assetId);

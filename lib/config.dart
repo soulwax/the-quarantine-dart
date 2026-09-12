@@ -73,7 +73,7 @@ const double roomIrCrossfadeSeconds = 0.2;
 
 const double texWorldSize = 2.0;
 
-const bool ps1Enabled = true;
+const bool ps1Enabled = false;
 const int ps1InternalWidth = 384;
 const int ps1InternalHeight = 216;
 const bool ps1VertexSnapping = false;
@@ -125,6 +125,23 @@ const double gameMinutesPerRealMinute = 15.0;
 /// Sparse test-chamber presentation: retain architecture and authored story
 /// anchors while suppressing decorative room dressing in the renderer.
 const bool sparseTestChambers = true;
+
+/// Authoritative set of room IDs that render fully dressed with furniture,
+/// joinery, and decorative details regardless of [sparseTestChambers].
+const Set<String> dressedRooms = {
+  'hall',
+  'living-room',
+  'kitchen',
+  'cellar',
+  'bedroom',
+  'landing',
+  'bathroom',
+  'spare-room',
+};
+
+/// Returns whether a room should be presented in its fully dressed state.
+bool isRoomDressed(String roomId) =>
+    dressedRooms.contains(roomId) || !sparseTestChambers;
 const double dayLengthSeconds = (24.0 * 60.0 / gameMinutesPerRealMinute) * 60.0;
 const int sunriseHour = 7;
 const int sunsetHour = 19;

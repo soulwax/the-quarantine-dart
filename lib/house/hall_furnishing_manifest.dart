@@ -86,85 +86,8 @@ class PropPlacement {
 /// Class defining the hall furnishing manifest.
 class HallFurnishingManifest {
   /// All props with authored placements in the hall.
-  static const List<PropPlacement> props = [
-    PropPlacement(
-      propId: 'hall.coat-hooks',
-      displayName: 'Coat Hooks',
-      roomId: 'hall',
-      materialFamily: 'mat-iron-cast',
-      positionX: 1.0,
-      positionY: 1.6,
-      positionZ: 0.0,
-      rotationYDegrees: 0.0,
-      collisionRadiusM: 0.15,
-      collisionHeightM: 1.6,
-      stateVariant: 'three-occupied',
-    ),
-    PropPlacement(
-      propId: 'hall.doormat',
-      displayName: 'Doormat',
-      roomId: 'hall',
-      materialFamily: 'mat-fabric-curtains',
-      positionX: 0.0,
-      positionY: 0.01,
-      positionZ: 0.5,
-      rotationYDegrees: 0.0,
-      collisionRadiusM: 0.3,
-      collisionHeightM: 0.02,
-      stateVariant: 'worn-center',
-    ),
-    PropPlacement(
-      propId: 'hall.umbrella-stand',
-      displayName: 'Umbrella Stand',
-      roomId: 'hall',
-      materialFamily: 'mat-ceramic-glaze',
-      positionX: 0.8,
-      positionY: 0.0,
-      positionZ: 0.2,
-      rotationYDegrees: 45.0,
-      collisionRadiusM: 0.12,
-      collisionHeightM: 0.55,
-      isInteractive: true,
-    ),
-    PropPlacement(
-      propId: 'hall.stair-runner',
-      displayName: 'Stair Runner',
-      roomId: 'hall',
-      materialFamily: 'mat-fabric-linen-sheet',
-      positionX: -1.0,
-      positionY: 0.0,
-      positionZ: 2.0,
-      rotationYDegrees: 0.0,
-      collisionRadiusM: 0.4,
-      collisionHeightM: 0.01,
-      stateVariant: 'threadbare-edges',
-    ),
-    PropPlacement(
-      propId: 'hall.picture-frames',
-      displayName: 'Picture Frames',
-      roomId: 'hall',
-      materialFamily: 'mat-wood-mahogany-dark',
-      positionX: 1.5,
-      positionY: 1.8,
-      positionZ: 1.0,
-      rotationYDegrees: 0.0,
-      collisionRadiusM: 0.25,
-      collisionHeightM: 0.3,
-    ),
-    PropPlacement(
-      propId: 'hall.light-switch',
-      displayName: 'Light Switch',
-      roomId: 'hall',
-      materialFamily: 'mat-enamel-white',
-      positionX: 0.2,
-      positionY: 1.3,
-      positionZ: 0.0,
-      rotationYDegrees: 0.0,
-      collisionRadiusM: 0.04,
-      collisionHeightM: 0.08,
-      isInteractive: true,
-    ),
-  ];
+  /// Hall placements have been migrated to assets/house/placements.json (HA-01/HA-02).
+  static const List<PropPlacement> props = [];
 
   /// Finds a prop placement by its unique ID.
   static PropPlacement? findProp(String propId) {

@@ -4,6 +4,7 @@ import '../../engine/math3.dart';
 import '../house.dart';
 import '../room.dart';
 import 'house_model_catalog.dart';
+import 'placement_manifest.dart';
 
 /// Architectural functional zones within a room.
 enum FunctionalZone {
@@ -22,7 +23,10 @@ enum FunctionalZone {
 /// An architecturally placed 3D model instance within a room.
 class ArchitecturalModelInstance {
   final String instanceId;
-  final String modelId;
+  final String? modelId;
+  final String? propKind;
+  final String? materialFamily;
+  final String source;
   final String roomId;
   final Vec3 worldPosition;
   final double rotationYDegrees;
@@ -35,7 +39,10 @@ class ArchitecturalModelInstance {
 
   const ArchitecturalModelInstance({
     required this.instanceId,
-    required this.modelId,
+    this.modelId,
+    this.propKind,
+    this.materialFamily,
+    this.source = 'catalog',
     required this.roomId,
     required this.worldPosition,
     this.rotationYDegrees = 0.0,
@@ -49,12 +56,19 @@ class ArchitecturalModelInstance {
 
   Vec3 get effectiveScale => scale ?? Vec3(1.0, 1.0, 1.0);
 
-  /// Resolves the corresponding catalog metadata.
-  ModelCatalogEntry get catalogEntry => HouseModelCatalog.resolve(modelId);
+  bool get isCatalog => source == 'catalog' && modelId != null;
+  bool get isProcedural => source == 'procedural';
+
+  /// Resolves the corresponding catalog metadata or null if procedural.
+  ModelCatalogEntry? get catalogEntry =>
+      modelId != null ? HouseModelCatalog.find(modelId!) : null;
 
   Map<String, dynamic> toJson() => {
         'instanceId': instanceId,
-        'modelId': modelId,
+        'source': source,
+        if (modelId != null) 'modelId': modelId,
+        if (propKind != null) 'propKind': propKind,
+        if (materialFamily != null) 'materialFamily': materialFamily,
         'roomId': roomId,
         'worldPosition': [worldPosition.x, worldPosition.y, worldPosition.z],
         'rotationYDegrees': rotationYDegrees,
@@ -62,8 +76,8 @@ class ArchitecturalModelInstance {
         'zone': zone.name,
         'collisionRadius': collisionRadius,
         'collisionHeight': collisionHeight,
-        'interactiveTag': interactiveTag,
-        'canonicalPropId': canonicalPropId,
+        if (interactiveTag != null) 'interactiveTag': interactiveTag,
+        if (canonicalPropId != null) 'canonicalPropId': canonicalPropId,
       };
 }
 
@@ -140,6 +154,14 @@ class HouseArchitect {
 
   static final HouseArchitect instance = HouseArchitect._();
 
+  HousePlacementsManifest _placementsManifest = HousePlacementsManifest.canonical;
+
+  HousePlacementsManifest get placementsManifest => _placementsManifest;
+
+  void setPlacements(HousePlacementsManifest manifest) {
+    _placementsManifest = manifest;
+  }
+
   /// Synthesizes and validates the complete architectural plan for the given house.
   ArchitecturalHousePlan planHouse(House house) {
     final programs = <String, RoomArchitecturalProgram>{};
@@ -153,6 +175,9 @@ class HouseArchitect {
     // Add dedicated Attic and Roof programs
     programs['attic'] = planAttic(house);
     programs['roof'] = planRoof(house);
+
+    // Placement manifest validation
+    errors.addAll(_placementsManifest.validate(house));
 
     // Clearance and architectural invariants validation for rooms
     for (final room in house.rooms) {
@@ -192,32 +217,25 @@ class HouseArchitect {
 
   RoomArchitecturalProgram _planHall(House house, Room room) {
     final o = room.origin;
+    final manifestPlacements = _placementsManifest.placementsFor(room.id);
     final instances = <ArchitecturalModelInstance>[
-      // Standing coat rack near front door alcove
-      ArchitecturalModelInstance(
-        instanceId: 'hall.coat-rack-01',
-        modelId: 'kenney.coat-rack',
-        roomId: room.id,
-        worldPosition: Vec3(o.x + 0.45, o.y, o.z + 0.55),
-        rotationYDegrees: 45.0,
-        zone: FunctionalZone.circulation,
-        collisionRadius: 0.25,
-        collisionHeight: 1.85,
-        interactiveTag: 'hall.coat-rack',
-        canonicalPropId: 'hall.coat-hooks',
-      ),
-      // Articulated lamp on entry console table
-      ArchitecturalModelInstance(
-        instanceId: 'hall.console-lamp-01',
-        modelId: 'polyhaven.desk-lamp-arm-01',
-        roomId: room.id,
-        worldPosition: Vec3(o.x + 0.35, o.y + 0.75, o.z + 2.50),
-        rotationYDegrees: 90.0,
-        zone: FunctionalZone.circulation,
-        collisionRadius: 0.15,
-        collisionHeight: 0.48,
-        interactiveTag: 'hall.entry-light',
-      ),
+      for (final p in manifestPlacements)
+        ArchitecturalModelInstance(
+          instanceId: p.instanceId,
+          source: p.source,
+          modelId: p.modelId,
+          propKind: p.propKind,
+          materialFamily: p.materialFamily,
+          roomId: room.id,
+          worldPosition: Vec3(o.x + p.position.x, o.y + p.position.y, o.z + p.position.z),
+          rotationYDegrees: p.rotationY,
+          scale: p.scale,
+          zone: p.zone,
+          collisionRadius: p.collisionRadius,
+          collisionHeight: p.collisionHeight,
+          interactiveTag: p.interactiveTag,
+          canonicalPropId: p.canonicalPropId,
+        ),
     ];
 
     return RoomArchitecturalProgram(

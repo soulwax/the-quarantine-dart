@@ -1,4 +1,5 @@
 import 'package:quarantine/house/hall_furnishing_manifest.dart';
+import 'package:quarantine/house/arch/placement_manifest.dart';
 import 'package:quarantine/house/kitchen_furnishing_manifest.dart';
 import 'package:quarantine/house/living_room_furnishing_manifest.dart';
 import 'package:quarantine/house/cellar_furnishing_manifest.dart';
@@ -60,7 +61,8 @@ class ProductionAssetAuditor {
 
     final roomManifestsVerified = hallValid && kitchenValid && livingValid && cellarValid && bedroomValid && upperValid;
 
-    final totalProps = HallFurnishingManifest.props.length +
+    final totalProps = HousePlacementsManifest.canonical.placements.length +
+        HallFurnishingManifest.props.length +
         KitchenFurnishingManifest.props.length +
         LivingRoomFurnishingManifest.props.length +
         CellarFurnishingManifest.props.length +
