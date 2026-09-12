@@ -112,6 +112,70 @@ final class HouseSurfaceMaterials {
       roughness: 0.92,
       uvMetres: 0.84,
     ),
+    // --- Poly Haven 80s–90s Curated PBR Surfaces ---
+    'polyhaven-decrepit-wallpaper': HouseSurfaceMaterial(
+      id: 'polyhaven-decrepit-wallpaper',
+      textureKey: 'polyhaven/walls/decrepit_wallpaper',
+      tint: 0xB8AD9E,
+      roughness: 0.88,
+      uvMetres: 1.0,
+    ),
+    'polyhaven-dark-paneled-wood': HouseSurfaceMaterial(
+      id: 'polyhaven-dark-paneled-wood',
+      textureKey: 'polyhaven/walls/dark_paneled_wood',
+      tint: 0x624838,
+      roughness: 0.72,
+      uvMetres: 0.8,
+    ),
+    'polyhaven-damaged-plaster': HouseSurfaceMaterial(
+      id: 'polyhaven-damaged-plaster',
+      textureKey: 'polyhaven/walls/damaged_plaster',
+      tint: 0xABA49A,
+      roughness: 0.90,
+      uvMetres: 1.2,
+    ),
+    'polyhaven-diagonal-parquet': HouseSurfaceMaterial(
+      id: 'polyhaven-diagonal-parquet',
+      textureKey: 'polyhaven/floors/diagonal_parquet',
+      tint: 0x8C6B4E,
+      roughness: 0.65,
+      uvMetres: 1.0,
+    ),
+    'polyhaven-dirty-carpet': HouseSurfaceMaterial(
+      id: 'polyhaven-dirty-carpet',
+      textureKey: 'polyhaven/floors/dirty_carpet',
+      tint: 0x8A8072,
+      roughness: 0.95,
+      uvMetres: 1.0,
+    ),
+    'polyhaven-brown-floor-tiles': HouseSurfaceMaterial(
+      id: 'polyhaven-brown-floor-tiles',
+      textureKey: 'polyhaven/floors/brown_floor_tiles',
+      tint: 0x967864,
+      roughness: 0.55,
+      uvMetres: 0.6,
+    ),
+    'polyhaven-ceiling-interior': HouseSurfaceMaterial(
+      id: 'polyhaven-ceiling-interior',
+      textureKey: 'polyhaven/ceilings/ceiling_interior',
+      tint: 0xC5BFB5,
+      roughness: 0.82,
+      uvMetres: 1.0,
+    ),
+    'polyhaven-roof-slates': HouseSurfaceMaterial(
+      id: 'polyhaven-roof-slates',
+      textureKey: 'polyhaven/roof/roof_slates_02',
+      tint: 0x3A3E44,
+      roughness: 0.70,
+      uvMetres: 1.0,
+    ),
+    'timber-rafters': HouseSurfaceMaterial(
+      id: 'timber-rafters',
+      textureKey: 'timber-dark',
+      tint: 0x483626,
+      roughness: 0.86,
+      uvMetres: 0.5,
+    ),
   };
 
   static HouseSurfaceMaterial forId(String id) {

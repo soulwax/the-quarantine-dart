@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../engine/math3.dart';
+import 'canonical_house_data.dart';
 import 'house.dart';
 import 'room.dart';
 
@@ -20,6 +21,13 @@ final class AuthoredHouseManifest {
   final List<AuthoredPortal> portals;
   final List<AuthoredStair> stairs;
   final List<String> exteriorCells;
+
+  static AuthoredHouseManifest? _canonical;
+
+  /// The canonical authoritative house blueprint embedded directly into the
+  /// binary, avoiding any disk or network dependency for pure Dart execution.
+  static AuthoredHouseManifest get canonical =>
+      _canonical ??= AuthoredHouseManifest.decode(canonicalHouseJson);
 
   const AuthoredHouseManifest({
     required this.houseId,

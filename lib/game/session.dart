@@ -121,7 +121,7 @@ class GameSession {
     time.skipToHour(startHour);
     final journal = Journal(vocabulary);
     final house = houseBlueprint == null
-        ? House.empty(houseSeed)
+        ? House.canonical(seed: houseSeed)
         : buildHouseFromBlueprint(houseBlueprint, houseSeed);
     return GameSession._(
       houseSeed,
@@ -182,7 +182,7 @@ class GameSession {
       json: Map<String, dynamic>.from(dayLoopJson),
     );
     final house = houseBlueprint == null
-        ? House.empty(seed)
+        ? House.canonical(seed: seed)
         : buildHouseFromBlueprint(houseBlueprint, seed);
     HouseState.fromJson(Map<String, dynamic>.from(houseJson)).applyTo(house);
     final difficulty = DifficultyState.fromJson(

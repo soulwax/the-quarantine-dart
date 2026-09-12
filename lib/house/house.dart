@@ -1,5 +1,12 @@
+import 'dart:typed_data';
+
 import '../engine/math3.dart';
+import 'arch/house_architect.dart';
+import 'authored_manifest.dart';
+import 'collision.dart';
 import 'drift.dart';
+import 'geometry.dart';
+import 'house_assembler.dart';
 import 'room.dart';
 import 'scale_profile.dart';
 
@@ -15,22 +22,68 @@ class House {
   Vec3? residenceSpawn;
   String? residenceRestAnchor;
 
+  /// Default constructor: instantiates the authoritative canonical house.
+  factory House([int seed = 42]) => House.canonical(seed: seed);
+
+  /// Creates the authoritative canonical house from the embedded blueprint.
+  factory House.canonical({int seed = 42}) =>
+      buildHouseFromBlueprint(AuthoredHouseManifest.canonical, seed);
+
   /// Creates an empty mutable graph. Production callers must install the
   /// validated authored blueprint through [buildHouseFromBlueprint].
   House.empty(this.seed);
 
+  /// Returns the architectural plan synthesized by [HouseArchitect].
+  ArchitecturalHousePlan get architecturalPlan =>
+      HouseAssembler.instance.planHouse(this);
+
+  /// Placed 3D models from the architectural program.
+  List<ArchitecturalModelInstance> get placedModels =>
+      architecturalPlan.placedModels;
+
+  /// Synthesizes architectural geometry for [room].
+  RoomGeometry buildGeometry(Room room) =>
+      HouseAssembler.instance.buildRoomGeometry(this, room);
+
+  /// Static door geometry for [room].
+  Float32List buildDoorStaticGeometry(Room room) =>
+      HouseAssembler.instance.buildDoorStaticGeometry(this, room);
+
+  /// Window joinery geometry (casing, sashes, muntins, sills, shutters) for [room].
+  Float32List buildWindowJoinery(Room room) =>
+      HouseAssembler.instance.buildWindowJoinery(this, room);
+
+  /// Synthesizes whole-house roof geometry.
+  Float32List buildRoofGeometry() =>
+      HouseAssembler.instance.buildRoofGeometry(this);
+
+  /// Synthesizes whole-house attic loft geometry.
+  Float32List buildAtticGeometry() =>
+      HouseAssembler.instance.buildAtticGeometry(this);
+
+  /// Authoritative physical collision hulls for architectural elements.
+  List<ArchitecturalCollisionHull> get collisionHulls =>
+      HouseAssembler.instance.buildCollisionHulls(this);
+
+  /// Physical collision hulls relevant to [roomId].
+  List<ArchitecturalCollisionHull> collisionHullsFor(String roomId) =>
+      collisionHulls.where((h) => h.roomId == roomId).toList(growable: false);
+
   /// Rebuilds lookup tables after an authored graph has been installed.
   void indexAuthoredBlueprint() {
     _index();
-    if (rooms.length != 8 || portals.length != 9 || stairs.length != 1) {
-      throw StateError(
-        'authored house requires 8 rooms, 9 portals, and 1 stair',
-      );
+    if (rooms.isEmpty) {
+      throw StateError('authored house must contain at least one room');
     }
     for (final portal in portals) {
       if ((portal.a != 'outside' && byId(portal.a) == null) ||
           (portal.b != 'outside' && byId(portal.b) == null)) {
         throw StateError('authored portal endpoint missing: ${portal.id}');
+      }
+    }
+    for (final stair in stairs) {
+      if (portalById(stair.portalId) == null) {
+        throw StateError('stair references unknown portal: ${stair.portalId}');
       }
     }
   }

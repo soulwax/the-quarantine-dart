@@ -128,6 +128,34 @@ class MasterAcousticSimulator {
       highFrequencyDamping: 0.60,
       earlyReflectionsGain: 0.20,
     ),
+    'landing': const RoomReverbProfile(
+      roomId: 'landing',
+      rt60Seconds: 0.85,
+      wetDryMix: 0.22,
+      highFrequencyDamping: 0.40,
+      earlyReflectionsGain: 0.28,
+    ),
+    'bathroom': const RoomReverbProfile(
+      roomId: 'bathroom',
+      rt60Seconds: 1.15, // Glazed sanitary tile flutter
+      wetDryMix: 0.30,
+      highFrequencyDamping: 0.18,
+      earlyReflectionsGain: 0.35,
+    ),
+    'spare-room': const RoomReverbProfile(
+      roomId: 'spare-room',
+      rt60Seconds: 0.65, // Bare boards, sloped ceiling
+      wetDryMix: 0.18,
+      highFrequencyDamping: 0.50,
+      earlyReflectionsGain: 0.22,
+    ),
+    'attic': const RoomReverbProfile(
+      roomId: 'attic',
+      rt60Seconds: 0.95, // Raw timber rafters and loft volume
+      wetDryMix: 0.26,
+      highFrequencyDamping: 0.30,
+      earlyReflectionsGain: 0.30,
+    ),
     'scullery': const RoomReverbProfile(
       roomId: 'scullery',
       rt60Seconds: 1.20, // Glazed ceramic tiles

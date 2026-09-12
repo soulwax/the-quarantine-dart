@@ -158,9 +158,48 @@ class PerRoomLightingRigs {
     'spareRoom': [], // Ambient only / torch
   };
 
-  /// Finds the lighting rig for a given room.
+  /// Finds the lighting rig for a given room, supporting both kebab-case and camelCase keys.
   static List<PracticalLightSpec> findRigForRoom(String roomId) {
-    return rigs[roomId] ?? [];
+    if (rigs.containsKey(roomId)) return rigs[roomId]!;
+    final normalized = switch (roomId) {
+      'living-room' => 'livingRoom',
+      'spare-room' => 'spareRoom',
+      'rear-service' => 'cellar',
+      _ => roomId,
+    };
+    return rigs[normalized] ?? [];
+  }
+
+  /// Calculates room-specific ambient irradiance color by blending sky ambient
+  /// with room practical color temperatures and wall tints.
+  static ({double r, double g, double b}) evaluateRoomAmbient({
+    required String roomId,
+    required ({double r, double g, double b}) skyAmbient,
+    double practicalWeight = 0.35,
+  }) {
+    final rig = findRigForRoom(roomId);
+    if (rig.isEmpty) return skyAmbient;
+
+    var sumR = 0.0;
+    var sumG = 0.0;
+    var sumB = 0.0;
+    for (final light in rig) {
+      sumR += light.colorRGB.r;
+      sumG += light.colorRGB.g;
+      sumB += light.colorRGB.b;
+    }
+    final avgR = sumR / rig.length;
+    final avgG = sumG / rig.length;
+    final avgB = sumB / rig.length;
+
+    final w = practicalWeight.clamp(0.0, 0.8);
+    final invW = 1.0 - w;
+
+    return (
+      r: (skyAmbient.r * invW + avgR * w).clamp(0.0, 1.0),
+      g: (skyAmbient.g * invW + avgG * w).clamp(0.0, 1.0),
+      b: (skyAmbient.b * invW + avgB * w).clamp(0.0, 1.0),
+    );
   }
 
   /// Returns all rigs as diagnostics JSON.

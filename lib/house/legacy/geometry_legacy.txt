@@ -1,0 +1,2785 @@
+import 'dart:math' as math;
+import 'dart:typed_data';
+
+import '../config.dart';
+import '../engine/math3.dart';
+import '../engine/mesh.dart';
+import 'house.dart';
+import 'house_assembler.dart';
+import 'room.dart';
+import 'scale_profile.dart';
+import 'surface_materials.dart';
+
+/// Runtime MVP shell thicknesses: authored 0.28 m exterior / 0.12 m
+/// partition sections, uniformly expanded by the 2.25x spacious house scale.
+const double houseExteriorWallThickness = 0.28 * houseModelScale;
+const double housePartitionWallThickness = 0.12 * houseModelScale;
+
+/// Rooms whose shell comes from a promoted model package rather than from the
+/// procedural generator below.
+///
+/// The house is migrating from generated wall/floor/ceiling volumes to authored
+/// FBX interiors. A migrated room's shell must disappear from BOTH ends: the
+/// renderer must stop drawing it, and this generator must stop building it.
+/// Skipping only the draw call leaves the vertices being generated, measured,
+/// and asserted over every frame and every test — which is exactly the state
+/// this set was introduced to end.
+///
+/// Add a room id here the moment its authored interior is promoted, and the
+/// generator and the presentation layer follow together.
+const Set<String> modelPresentedRoomShells = {
+  // Promoted from assets-src/fbx/living-room/source/InteriorTest.fbx via
+  // web/res/models/living-room/.
+  'living-room',
+};
+
+/// Whether [roomId]'s shell is presented by an authored model package.
+bool roomShellIsModelPresented(String roomId) =>
+    modelPresentedRoomShells.contains(roomId);
+
+/// CPU-only retained geometry shared by the legacy emitter and presentation
+/// adapters. It reads authored house facts but owns no renderer handles.
+final class RoomGeometry {
+  final Float32List floor;
+  final Float32List ceiling;
+  final Float32List walls;
+  final Float32List doors;
+
+  const RoomGeometry({
+    required this.floor,
+    required this.ceiling,
+    required this.walls,
+    required this.doors,
+  });
+
+  /// The shell of a room the generator does not build, because an authored
+  /// model package presents it instead.
+  static final RoomGeometry empty = RoomGeometry(
+    floor: Float32List(0),
+    ceiling: Float32List(0),
+    walls: Float32List(0),
+    doors: Float32List(0),
+  );
+
+  /// True when this room contributes no generated geometry at all.
+  bool get isEmpty =>
+      floor.isEmpty && ceiling.isEmpty && walls.isEmpty && doors.isEmpty;
+
+  Float32List get combined =>
+      Float32List.fromList([...floor, ...ceiling, ...walls, ...doors]);
+}
+
+RoomGeometry buildRoomGeometry(House house, Room room) {
+  return HouseAssembler.instance.buildRoomGeometry(house, room);
+}
+
+void _addCeilingDetails(StaticMeshBuilder builder, Room room, Vec3 size) {
+  final x = room.origin.x;
+  final y = room.origin.y;
+  final z = room.origin.z;
+  final top = y + size.y;
+  const plaster = 0xB7ADA0;
+  const timber = 0x594333;
+  const iron = 0x3E3C38;
+  if (room.id == 'hall') {
+    // A narrow hall reads more convincingly with two shallow timber rails
+    // aligned to the stair void rather than a perfectly blank ceiling.
+    for (final beamX in [x + 0.28, x + size.x - 0.42]) {
+      _box(
+        builder,
+        Vec3(beamX, top - 0.10, z + 0.20),
+        Vec3(beamX + 0.14, top - 0.025, z + size.z - 0.20),
+        timber,
+      );
+    }
+  } else if (room.id == 'living-room') {
+    final centerX = x + size.x * 0.48;
+    final centerZ = z + size.z * 0.52;
+    _box(
+      builder,
+      Vec3(centerX - 0.34, top - 0.06, centerZ - 0.34),
+      Vec3(centerX + 0.34, top - 0.018, centerZ + 0.34),
+      plaster,
+    );
+    _box(
+      builder,
+      Vec3(centerX - 0.22, top - 0.075, centerZ - 0.22),
+      Vec3(centerX + 0.22, top - 0.06, centerZ + 0.22),
+      timber,
+    );
+  } else if (room.id == 'kitchen') {
+    // Uneven service-room ceiling battens add age without narrowing the route.
+    for (var i = 0; i < 3; i++) {
+      final beamZ = z + 0.65 + i * 1.0;
+      _box(
+        builder,
+        Vec3(x + 0.16, top - 0.075, beamZ),
+        Vec3(x + size.x - 0.16, top - 0.025, beamZ + 0.10),
+        timber,
+      );
+    }
+  } else if (room.id == 'cellar') {
+    // Two low service pipes make the below-grade ceiling read as inhabited
+    // infrastructure rather than an untextured cap.
+    for (final pipeX in [x + 0.62, x + size.x - 0.78]) {
+      _box(
+        builder,
+        Vec3(pipeX, top - 0.16, z + 0.25),
+        Vec3(pipeX + 0.10, top - 0.08, z + size.z - 0.25),
+        iron,
+      );
+    }
+  }
+}
+
+/// Builds only the stateful leaf for a portal. The frame and its hardware stay
+/// in the room shell; this mesh is replaced when [Portal.open] changes so a
+/// door never remains baked in the wrong pose.
+Float32List buildDoorLeafGeometry(House house, Room room, Portal portal) {
+  if (portal.doorKit == null || portal.stair) return Float32List(0);
+  final builder = StaticMeshBuilder();
+  _addDoorLeaf(
+    builder,
+    room,
+    house.effectiveSize(room),
+    portal,
+    _doorFrameColor(portal),
+  );
+  return builder.build();
+}
+
+/// Builds the static part of every hinged door in a room. Frames, thresholds,
+/// and hardware stay in the room shell; only the leaf is replaced on state
+/// changes by the Pixeldart runtime.
+Float32List buildDoorStaticGeometry(House house, Room room) {
+  final builder = StaticMeshBuilder();
+  final size = house.effectiveSize(room);
+  for (final portal in house.portalsFor(room.id)) {
+    if (portal.doorKit == null || portal.stair) continue;
+    _addDoorFrame(builder, room, size, portal, includeLeaf: false);
+  }
+  return builder.build();
+}
+
+void _addFloorFinish(StaticMeshBuilder builder, Room room, Vec3 size) {
+  final x = room.origin.x;
+  final y = room.origin.y;
+  final z = room.origin.z;
+  final material = HouseSurfaceMaterials.forId(room.surfaceFloor);
+  if (room.surfaceFloor == 'floor-wood') {
+    const boardDepth = 0.15;
+    final boardCount = (size.z / 0.22).floor();
+    for (var i = 0; i < boardCount; i++) {
+      final z0 = z + i * 0.22 + 0.018;
+      final tone = i.isEven
+          ? _shade(material.tint, 1.04)
+          : _shade(material.tint, 0.84);
+      _box(
+        builder,
+        Vec3(x, y + 0.004, z0),
+        Vec3(x + size.x, y + 0.014, z0 + boardDepth),
+        tone,
+      );
+    }
+    if (room.id == 'hall' || room.id == 'landing') {
+      final runnerWidth = room.id == 'hall' ? 1.0 : 0.82;
+      final runnerX = x + (size.x - runnerWidth) * 0.5;
+      _box(
+        builder,
+        Vec3(runnerX, y + 0.016, z + 0.18),
+        Vec3(runnerX + runnerWidth, y + 0.026, z + size.z - 0.18),
+        0x62535A,
+      );
+      _box(
+        builder,
+        Vec3(runnerX + 0.08, y + 0.027, z + 0.22),
+        Vec3(runnerX + runnerWidth - 0.08, y + 0.033, z + size.z - 0.22),
+        0x82706C,
+      );
+    }
+    if (room.id == 'living-room') {
+      _box(
+        builder,
+        Vec3(x + 1.15, y + 0.018, z + 2.15),
+        Vec3(x + 4.70, y + 0.030, z + 4.35),
+        0x554A4A,
+      );
+      _box(
+        builder,
+        Vec3(x + 1.28, y + 0.031, z + 2.28),
+        Vec3(x + 4.57, y + 0.037, z + 4.22),
+        0x77656A,
+      );
+    }
+    return;
+  }
+  if (room.surfaceFloor == 'floor-linoleum') {
+    for (var i = 0; i < 5; i++) {
+      final z0 = z + 0.18 + i * 0.62;
+      _box(
+        builder,
+        Vec3(x + 0.08, y + 0.004, z0),
+        Vec3(x + size.x - 0.08, y + 0.012, z0 + 0.50),
+        i.isEven ? _shade(material.tint, 1.04) : _shade(material.tint, 0.88),
+      );
+    }
+    return;
+  }
+  if (room.surfaceFloor == 'floor-tiles') {
+    for (var ix = 0; ix < 4; ix++) {
+      for (var iz = 0; iz < 3; iz++) {
+        final x0 = x + 0.08 + ix * 0.86;
+        final z0 = z + 0.08 + iz * 0.86;
+        _box(
+          builder,
+          Vec3(x0, y + 0.004, z0),
+          Vec3(x0 + 0.78, y + 0.012, z0 + 0.78),
+          (ix + iz).isEven
+              ? _shade(material.tint, 1.06)
+              : _shade(material.tint, 0.88),
+        );
+      }
+    }
+    return;
+  }
+  if (room.surfaceFloor == 'floor-concrete') {
+    _box(
+      builder,
+      Vec3(x + 0.08, y + 0.004, z + 0.08),
+      Vec3(x + size.x - 0.08, y + 0.014, z + size.z - 0.08),
+      material.tint,
+    );
+    _box(
+      builder,
+      Vec3(x + 2.20, y + 0.015, z + 2.45),
+      Vec3(x + 2.68, y + 0.021, z + 2.93),
+      _shade(material.tint, 0.58),
+    );
+  }
+}
+
+/// Adds authored, view-only furnishing and architectural anchors to the room
+/// mesh. These pieces deliberately stay in the render stream: collision,
+/// focus queries and portal traversal continue to use the simulation facts.
+void _addRoomFixtures(
+  StaticMeshBuilder builder,
+  House house,
+  Room room,
+  Vec3 size,
+) {
+  final x = room.origin.x;
+  final y = room.origin.y;
+  final z = room.origin.z;
+  const wood = 0x5A3B2A;
+  const darkWood = 0x38271F;
+  const iron = 0x343330;
+  const stone = 0xB5AA98;
+  const ceramic = 0xD1CCC1;
+  const fabric = 0x6A6470;
+  const soot = 0x211E1C;
+
+  switch (room.id) {
+    case 'living-room':
+      _addFurniturePacket(builder, room, size, 'living');
+      _addLifeDressing(builder, room, 'living');
+      final fireX = x + size.x - 0.48;
+      final fireZ = z + size.z * 0.40;
+      _box(
+        builder,
+        Vec3(fireX, y, fireZ - 0.85),
+        Vec3(x + size.x, y + 2.55, fireZ + 0.85),
+        0x776554,
+      );
+      _box(
+        builder,
+        Vec3(fireX - 0.38, y + 0.02, fireZ - 0.72),
+        Vec3(x + size.x + 0.05, y + 0.16, fireZ + 0.72),
+        stone,
+      );
+      _box(
+        builder,
+        Vec3(fireX - 0.52, y + 2.18, fireZ - 0.94),
+        Vec3(x + size.x + 0.08, y + 2.34, fireZ + 0.94),
+        wood,
+      );
+      _box(
+        builder,
+        Vec3(fireX - 0.02, y + 0.45, fireZ - 0.48),
+        Vec3(x + size.x + 0.03, y + 1.48, fireZ + 0.48),
+        soot,
+      );
+      for (var i = 0; i < 3; i++) {
+        _box(
+          builder,
+          Vec3(fireX - 0.08 + i * 0.18, y + 0.28, fireZ - 0.42),
+          Vec3(fireX - 0.02 + i * 0.18, y + 1.35, fireZ - 0.34),
+          iron,
+        );
+      }
+      // Tile slips, mantel brackets and two small domestic objects keep the
+      // fireplace from reading as a single procedural block.
+      for (var i = 0; i < 4; i++) {
+        _box(
+          builder,
+          Vec3(fireX - 0.01, y + 1.55, fireZ - 0.34 + i * 0.20),
+          Vec3(fireX + 0.04, y + 1.70, fireZ - 0.18 + i * 0.20),
+          stone,
+        );
+      }
+      for (final bracketZ in [fireZ - 0.68, fireZ + 0.56]) {
+        _box(
+          builder,
+          Vec3(fireX - 0.42, y + 2.00, bracketZ),
+          Vec3(fireX - 0.26, y + 2.20, bracketZ + 0.16),
+          darkWood,
+        );
+      }
+      _box(
+        builder,
+        Vec3(fireX - 0.27, y + 2.34, fireZ - 0.58),
+        Vec3(fireX - 0.07, y + 2.52, fireZ - 0.38),
+        ceramic,
+      );
+      _box(
+        builder,
+        Vec3(fireX - 0.25, y + 2.34, fireZ + 0.34),
+        Vec3(fireX - 0.06, y + 2.49, fireZ + 0.52),
+        wood,
+      );
+    case 'hall':
+      _addStairRun(builder, house, room, size, darkWood, iron);
+      _addUnderStairCupboard(builder, house, room, size, darkWood, iron);
+      _addLifeDressing(builder, room, 'hall');
+      // A narrow hall table and a framed clock sit outside the circulation
+      // route, giving the entrance a believable domestic landmark.
+      _box(
+        builder,
+        Vec3(x + 0.28, y + 0.78, z + 0.52),
+        Vec3(x + 0.68, y + 0.88, z + 2.15),
+        darkWood,
+      );
+      for (final legZ in [z + 0.66, z + 2.01]) {
+        _box(
+          builder,
+          Vec3(x + 0.34, y, legZ),
+          Vec3(x + 0.42, y + 0.8, legZ + 0.08),
+          wood,
+        );
+      }
+      final clockX = x + 1.22;
+      _box(
+        builder,
+        Vec3(clockX - 0.28, y + 2.35, z + 0.02),
+        Vec3(clockX + 0.28, y + 3.02, z + 0.10),
+        darkWood,
+      );
+      _box(
+        builder,
+        Vec3(clockX - 0.13, y + 2.48, z + 0.10),
+        Vec3(clockX + 0.13, y + 2.72, z + 0.15),
+        stone,
+      );
+      _box(
+        builder,
+        Vec3(clockX - 0.025, y + 1.82, z + 0.08),
+        Vec3(clockX + 0.025, y + 2.36, z + 0.13),
+        iron,
+      );
+      for (var i = 0; i < 3; i++) {
+        _box(
+          builder,
+          Vec3(x + 1.70 + i * 0.36, y + 1.74, z + 0.08),
+          Vec3(x + 1.78 + i * 0.36, y + 1.84, z + 0.16),
+          iron,
+        );
+      }
+      _box(
+        builder,
+        Vec3(x + 0.86, y, z + 0.62),
+        Vec3(x + 1.10, y + 0.72, z + 0.90),
+        ceramic,
+      );
+      _box(
+        builder,
+        Vec3(x + 0.91, y + 0.72, z + 0.68),
+        Vec3(x + 1.05, y + 0.82, z + 0.84),
+        darkWood,
+      );
+    case 'kitchen':
+      _addLifeDressing(builder, room, 'kitchen');
+      final rangeX = x + size.x - 0.62;
+      _box(
+        builder,
+        Vec3(rangeX, y, z + 0.72),
+        Vec3(x + size.x, y + 1.28, z + 2.18),
+        iron,
+      );
+      _box(
+        builder,
+        Vec3(rangeX - 0.08, y + 1.28, z + 0.62),
+        Vec3(x + size.x + 0.04, y + 1.38, z + 2.28),
+        stone,
+      );
+      for (var i = 0; i < 3; i++) {
+        _box(
+          builder,
+          Vec3(rangeX + 0.12, y + 1.39, z + 0.88 + i * 0.40),
+          Vec3(rangeX + 0.40, y + 1.45, z + 1.16 + i * 0.40),
+          soot,
+        );
+      }
+      _box(
+        builder,
+        Vec3(x + 1.05, y + 0.82, z + 1.15),
+        Vec3(x + 3.10, y + 0.94, z + 2.35),
+        wood,
+      );
+      for (final tableX in [x + 1.18, x + 2.94]) {
+        _box(
+          builder,
+          Vec3(tableX, y, z + 1.28),
+          Vec3(tableX + 0.10, y + 0.82, z + 1.38),
+          darkWood,
+        );
+      }
+      _box(
+        builder,
+        Vec3(x + 0.48, y + 1.72, z + 2.74),
+        Vec3(x + 2.55, y + 1.84, z + 2.88),
+        darkWood,
+      );
+      _box(
+        builder,
+        Vec3(x + 3.38, y + 0.94, z + 1.26),
+        Vec3(x + 4.48, y + 1.02, z + 2.22),
+        ceramic,
+      );
+      _box(
+        builder,
+        Vec3(x + 3.82, y + 1.02, z + 1.66),
+        Vec3(x + 3.90, y + 1.34, z + 1.74),
+        iron,
+      );
+      _box(
+        builder,
+        Vec3(x + 3.72, y + 1.30, z + 1.66),
+        Vec3(x + 4.00, y + 1.36, z + 1.74),
+        iron,
+      );
+      for (var i = 0; i < 2; i++) {
+        _box(
+          builder,
+          Vec3(x + 1.38 + i * 0.55, y + 0.95, z + 1.48),
+          Vec3(x + 1.78 + i * 0.55, y + 1.05, z + 1.88),
+          ceramic,
+        );
+      }
+    case 'cellar':
+      _addLifeDressing(builder, room, 'cellar');
+      for (var i = 0; i < 4; i++) {
+        _box(
+          builder,
+          Vec3(x + 0.35 + i * 0.28, y, z + 1.05),
+          Vec3(x + 0.58 + i * 0.28, y + 0.55 + (i % 2) * 0.18, z + 2.0),
+          darkWood,
+        );
+      }
+      _box(
+        builder,
+        Vec3(x + 2.55, y + 0.15, z + 0.38),
+        Vec3(x + 2.72, y + 1.55, z + 0.56),
+        iron,
+      );
+      _box(
+        builder,
+        Vec3(x + 2.42, y + 1.28, z + 0.32),
+        Vec3(x + 2.86, y + 1.38, z + 0.65),
+        ceramic,
+      );
+      _box(
+        builder,
+        Vec3(x + 0.40, y + 1.72, z + 0.45),
+        Vec3(x + 3.40, y + 1.82, z + 0.58),
+        iron,
+      );
+      _box(
+        builder,
+        Vec3(x + 1.90, y + 1.58, z + 0.42),
+        Vec3(x + 2.06, y + 1.76, z + 0.61),
+        iron,
+      );
+      _box(
+        builder,
+        Vec3(x + 1.84, y + 1.62, z + 0.55),
+        Vec3(x + 2.12, y + 1.70, z + 0.64),
+        iron,
+      );
+    case 'bedroom':
+      _addFurniturePacket(builder, room, size, 'bedroom');
+      _addLifeDressing(builder, room, 'bedroom');
+      final bedX = x + 0.85;
+      final bedZ = z + 2.08;
+      _box(
+        builder,
+        Vec3(bedX, y + 0.42, bedZ),
+        Vec3(bedX + 3.65, y + 0.72, bedZ + 2.05),
+        fabric,
+      );
+      _box(
+        builder,
+        Vec3(bedX - 0.10, y + 0.72, bedZ - 0.12),
+        Vec3(bedX + 3.75, y + 1.28, bedZ + 0.10),
+        wood,
+      );
+      _box(
+        builder,
+        Vec3(bedX + 0.22, y + 0.74, bedZ + 1.35),
+        Vec3(bedX + 1.05, y + 0.90, bedZ + 1.82),
+        ceramic,
+      );
+      _box(
+        builder,
+        Vec3(x + size.x - 0.95, y + 0.78, z + 0.58),
+        Vec3(x + size.x - 0.18, y + 1.48, z + 1.42),
+        wood,
+      );
+      _box(
+        builder,
+        Vec3(x + size.x - 1.04, y + 1.48, z + 0.48),
+        Vec3(x + size.x - 0.10, y + 1.57, z + 1.52),
+        darkWood,
+      );
+      for (final pillowZ in [bedZ + 0.22, bedZ + 0.78]) {
+        _box(
+          builder,
+          Vec3(bedX + 0.36, y + 0.75, pillowZ),
+          Vec3(bedX + 1.12, y + 0.92, pillowZ + 0.42),
+          ceramic,
+        );
+      }
+      for (final legX in [bedX + 0.12, bedX + 3.45]) {
+        for (final legZ in [bedZ + 0.12, bedZ + 1.72]) {
+          _box(
+            builder,
+            Vec3(legX, y + 0.08, legZ),
+            Vec3(legX + 0.10, y + 0.44, legZ + 0.10),
+            darkWood,
+          );
+        }
+      }
+    case 'landing':
+      _addFurniturePacket(builder, room, size, 'landing');
+      _box(
+        builder,
+        Vec3(x + 0.34, y + 0.02, z + 1.62),
+        Vec3(x + 0.48, y + 1.06, z + 2.70),
+        darkWood,
+      );
+      for (var i = 0; i < 4; i++) {
+        _box(
+          builder,
+          Vec3(x + 0.48, y + 0.82 + i * 0.20, z + 1.68 + i * 0.22),
+          Vec3(x + 2.14, y + 0.90 + i * 0.20, z + 1.76 + i * 0.22),
+          wood,
+        );
+      }
+      for (var i = 0; i < 3; i++) {
+        _box(
+          builder,
+          Vec3(x + 0.62 + i * 0.46, y + 1.02, z + 1.74 + i * 0.22),
+          Vec3(x + 0.70 + i * 0.46, y + 1.78, z + 1.82 + i * 0.22),
+          darkWood,
+        );
+      }
+    case 'bathroom':
+      _addFurniturePacket(builder, room, size, 'bathroom');
+      _addLifeDressing(builder, room, 'bathroom');
+      _box(
+        builder,
+        Vec3(x + 0.30, y + 0.04, z + 0.38),
+        Vec3(x + 2.15, y + 0.62, z + 1.22),
+        ceramic,
+      );
+      _box(
+        builder,
+        Vec3(x + 0.42, y + 0.62, z + 0.48),
+        Vec3(x + 2.03, y + 0.72, z + 1.12),
+        stone,
+      );
+      _box(
+        builder,
+        Vec3(x + size.x - 0.78, y + 0.12, z + size.z - 0.88),
+        Vec3(x + size.x - 0.18, y + 1.75, z + size.z - 0.28),
+        ceramic,
+      );
+      _box(
+        builder,
+        Vec3(x + size.x - 0.86, y + 1.68, z + size.z - 0.98),
+        Vec3(x + size.x - 0.10, y + 1.82, z + size.z - 0.18),
+        iron,
+      );
+      _box(
+        builder,
+        Vec3(x + 0.86, y + 0.72, z + 0.68),
+        Vec3(x + 0.96, y + 1.18, z + 0.78),
+        iron,
+      );
+      _box(
+        builder,
+        Vec3(x + 0.70, y + 1.12, z + 0.68),
+        Vec3(x + 1.12, y + 1.18, z + 0.78),
+        iron,
+      );
+    case 'spare-room':
+      _addFurniturePacket(builder, room, size, 'spare');
+      _box(
+        builder,
+        Vec3(x + 1.0, y, z + 0.70),
+        Vec3(x + 3.25, y + 1.65, z + 2.0),
+        fabric,
+      );
+      _box(
+        builder,
+        Vec3(x + 0.80, y + 1.60, z + 0.52),
+        Vec3(x + 3.45, y + 1.74, z + 2.18),
+        wood,
+      );
+      _box(
+        builder,
+        Vec3(x + size.x - 1.05, y, z + size.z - 1.02),
+        Vec3(x + size.x - 0.25, y + 0.72, z + size.z - 0.24),
+        darkWood,
+      );
+      for (var i = 0; i < 3; i++) {
+        _box(
+          builder,
+          Vec3(x + size.x - 0.98, y + 0.18 + i * 0.16, z + size.z - 1.12),
+          Vec3(x + size.x - 0.28, y + 0.24 + i * 0.16, z + size.z - 1.04),
+          iron,
+        );
+      }
+  }
+
+  // Populate the room with geometric test primitives (pedestals, calibration spheres,
+  // cubes, wedge ramps, pyramids, and stepped locomotion platforms).
+  _addTestRoomPrimitives(builder, house, room, size);
+}
+
+/// Renders an elegant test room environment containing primitive geometric
+/// testing objects (pedestals, calibration spheres, cubes, wedge ramps,
+/// pyramids, stepped locomotion testers, and indicator beacons).
+void _addTestRoomPrimitives(
+  StaticMeshBuilder builder,
+  House house,
+  Room room,
+  Vec3 size,
+) {
+  final x = room.origin.x;
+  final y = room.origin.y;
+  final z = room.origin.z;
+
+  const chromeColor = 0xE0E0EE;
+  const goldColor = 0xFFD700;
+  const crimsonColor = 0xD32F2F;
+  const alabasterColor = 0xF5F0E6;
+  const cobaltColor = 0x1976D2;
+  const emeraldColor = 0x388E3C;
+  const amberColor = 0xFFA000;
+  const darkCharcoal = 0x263238;
+  const mediumSlate = 0x455A64;
+  const lightSlate = 0x78909C;
+
+  switch (room.id) {
+    case 'living-room':
+      // 1. Central Material & PBR Calibration Array on Circular Plinth
+      final plinthX = x + size.x * 0.45;
+      final plinthZ = z + size.z * 0.50;
+      _cylinder(
+        builder,
+        Vec3(plinthX, y, plinthZ),
+        0.85,
+        0.35,
+        darkCharcoal,
+        segments: 16,
+      );
+
+      // Four calibration spheres on small pedestals (Chrome, Gold, Crimson, Alabaster)
+      final offsets = [
+        (-0.45, -0.45, chromeColor),
+        (0.45, -0.45, goldColor),
+        (-0.45, 0.45, crimsonColor),
+        (0.45, 0.45, alabasterColor),
+      ];
+      for (final offset in offsets) {
+        final sx = plinthX + offset.$1;
+        final sz = plinthZ + offset.$2;
+        final col = offset.$3;
+        _cylinder(
+          builder,
+          Vec3(sx, y + 0.35, sz),
+          0.12,
+          0.30,
+          mediumSlate,
+          segments: 8,
+        );
+        _sphere(
+          builder,
+          Vec3(sx, y + 0.80, sz),
+          0.16,
+          col,
+          latBands: 8,
+          longBands: 12,
+        );
+      }
+
+      // Floating central glowing test diamond / pyramid atop plinth
+      _pyramid(
+        builder,
+        Vec3(plinthX, y + 0.55, plinthZ),
+        0.30,
+        0.45,
+        amberColor,
+        glow: true,
+      );
+
+      // 2. Continuous Roughness & Metalness Calibration Rails (5 Dielectric + 5 Conductor Spheres)
+      final railStartX = x + 0.8;
+      final railZ1 = z + size.z * 0.25;
+      final railZ2 = z + size.z * 0.35;
+      // Rail 1: Dielectric rough-to-smooth spheres
+      for (var i = 0; i < 5; i++) {
+        final rx = railStartX + i * 0.45;
+        _cylinder(
+          builder,
+          Vec3(rx, y, railZ1),
+          0.08,
+          0.45,
+          darkCharcoal,
+          segments: 8,
+        );
+        final tintShade = 0x50 + (i * 45);
+        final col = (tintShade << 16) | (tintShade << 8) | tintShade;
+        _sphere(
+          builder,
+          Vec3(rx, y + 0.60, railZ1),
+          0.12,
+          col,
+          latBands: 6,
+          longBands: 10,
+        );
+      }
+      // Rail 2: Conductor metallic spheres (Gold to Copper to Chrome)
+      final metalColors = [0xFFD700, 0xE6A15C, 0xC0C0C0, 0x90CAF9, 0xE0E0EE];
+      for (var i = 0; i < 5; i++) {
+        final rx = railStartX + i * 0.45;
+        _cylinder(
+          builder,
+          Vec3(rx, y, railZ2),
+          0.08,
+          0.45,
+          mediumSlate,
+          segments: 8,
+        );
+        _sphere(
+          builder,
+          Vec3(rx, y + 0.60, railZ2),
+          0.12,
+          metalColors[i],
+          latBands: 6,
+          longBands: 10,
+        );
+      }
+
+      // 3. Shadow Penumbra Gnomons & Contact Ground Markers
+      final gnomonX = x + size.x * 0.72;
+      final gnomonZ = z + size.z * 0.22;
+      // Checker contact pad
+      _box(
+        builder,
+        Vec3(gnomonX - 0.6, y, gnomonZ - 0.6),
+        Vec3(gnomonX + 0.6, y + 0.02, gnomonZ + 0.6),
+        0x37474F,
+      );
+      _box(
+        builder,
+        Vec3(gnomonX - 0.4, y + 0.02, gnomonZ - 0.4),
+        Vec3(gnomonX + 0.4, y + 0.03, gnomonZ + 0.4),
+        0xB0BEC5,
+      );
+      // Three shadow-casting rods of varying thicknesses (thin 2cm, med 6cm, thick 12cm)
+      _cylinder(
+        builder,
+        Vec3(gnomonX - 0.3, y, gnomonZ),
+        0.02,
+        1.2,
+        darkCharcoal,
+        segments: 6,
+      );
+      _cylinder(
+        builder,
+        Vec3(gnomonX, y, gnomonZ),
+        0.05,
+        1.2,
+        mediumSlate,
+        segments: 8,
+      );
+      _cylinder(
+        builder,
+        Vec3(gnomonX + 0.3, y, gnomonZ),
+        0.10,
+        1.2,
+        darkCharcoal,
+        segments: 10,
+      );
+
+      // 4. Step Climbing Obstacle Gauge (5 risers: 5cm, 10cm, 15cm, 20cm, 30cm)
+      final stepGaugeX = x + size.x - 1.8;
+      final stepGaugeZ = z + 0.6;
+      final riserHeights = [0.05, 0.10, 0.15, 0.20, 0.30];
+      for (var i = 0; i < riserHeights.length; i++) {
+        final curZ = stepGaugeZ + i * 0.40;
+        final h = riserHeights[i];
+        _box(
+          builder,
+          Vec3(stepGaugeX, y, curZ),
+          Vec3(stepGaugeX + 0.9, y + h, curZ + 0.35),
+          i % 2 == 0 ? mediumSlate : lightSlate,
+        );
+      }
+
+      // 5. Metric Height & Scale Calibration Archway
+      final archX = x + size.x * 0.5;
+      final archZ = z + size.z - 1.2;
+      // Left/Right vertical posts
+      _box(
+        builder,
+        Vec3(archX - 0.8, y, archZ - 0.1),
+        Vec3(archX - 0.65, y + 2.5, archZ + 0.1),
+        darkCharcoal,
+      );
+      _box(
+        builder,
+        Vec3(archX + 0.65, y, archZ - 0.1),
+        Vec3(archX + 0.8, y + 2.5, archZ + 0.1),
+        darkCharcoal,
+      );
+      // Top lintel
+      _box(
+        builder,
+        Vec3(archX - 0.85, y + 2.4, archZ - 0.12),
+        Vec3(archX + 0.85, y + 2.55, archZ + 0.12),
+        crimsonColor,
+      );
+      // Height marker bands (1.0m, 1.7m eye-level, 2.0m)
+      _box(
+        builder,
+        Vec3(archX - 0.82, y + 1.0, archZ - 0.11),
+        Vec3(archX - 0.63, y + 1.04, archZ + 0.11),
+        goldColor,
+      );
+      _box(
+        builder,
+        Vec3(archX - 0.82, y + 1.68, archZ - 0.11),
+        Vec3(archX - 0.63, y + 1.72, archZ + 0.11),
+        emeraldColor,
+      );
+      _box(
+        builder,
+        Vec3(archX - 0.82, y + 2.0, archZ - 0.11),
+        Vec3(archX - 0.63, y + 2.04, archZ + 0.11),
+        goldColor,
+      );
+
+      // 6. Chamfered Normal Map Test Cube & Slope Ramps
+      final stackX = x + 1.2;
+      final stackZ = z + 1.2;
+      _box(
+        builder,
+        Vec3(stackX, y, stackZ),
+        Vec3(stackX + 0.8, y + 0.6, stackZ + 0.8),
+        mediumSlate,
+      );
+      _box(
+        builder,
+        Vec3(stackX + 0.15, y + 0.6, stackZ + 0.15),
+        Vec3(stackX + 0.65, y + 1.0, stackZ + 0.65),
+        lightSlate,
+      );
+      _pyramid(
+        builder,
+        Vec3(stackX + 0.4, y + 1.0, stackZ + 0.4),
+        0.35,
+        0.35,
+        alabasterColor,
+      );
+
+      // 7. Slope Wedge Ramp & Stepped Locomotion Tester Platform
+      _wedge(
+        builder,
+        Vec3(x + 0.8, y, z + size.z - 2.2),
+        Vec3(x + 2.2, y + 0.55, z + size.z - 1.0),
+        darkCharcoal,
+        Facing.north,
+      );
+      _steppedPlatform(
+        builder,
+        Vec3(x + size.x - 2.8, y, z + size.z * 0.55),
+        1.0,
+        0.28,
+        0.14,
+        4,
+        mediumSlate,
+      );
+
+      // 8. Test Pyramid Solid
+      _pyramid(
+        builder,
+        Vec3(x + size.x * 0.25, y, z + size.z * 0.78),
+        0.75,
+        1.05,
+        cobaltColor,
+      );
+
+    case 'hall':
+      // Twin entrance test pillars (fluted cylinders at threshold)
+      _cylinder(
+        builder,
+        Vec3(x + 0.55, y, z + 0.55),
+        0.22,
+        2.4,
+        mediumSlate,
+        segments: 12,
+      );
+      _cylinder(
+        builder,
+        Vec3(x + size.x - 0.55, y, z + 0.55),
+        0.22,
+        2.4,
+        mediumSlate,
+        segments: 12,
+      );
+      // Floating emerald orientation beacon
+      _sphere(
+        builder,
+        Vec3(x + size.x * 0.5, y + 1.6, z + 1.2),
+        0.18,
+        emeraldColor,
+        glow: true,
+      );
+      // Lighting calibration stand
+      _cylinder(
+        builder,
+        Vec3(x + 0.8, y, z + 2.4),
+        0.15,
+        0.9,
+        darkCharcoal,
+        segments: 8,
+      );
+      _sphere(
+        builder,
+        Vec3(x + 0.8, y + 1.05, z + 2.4),
+        0.15,
+        amberColor,
+        glow: true,
+      );
+
+    case 'kitchen':
+      // Secondary proving bench with dual test spheres (Cobalt & Emerald)
+      final benchX = x + size.x * 0.45;
+      final benchZ = z + size.z * 0.50;
+      _box(
+        builder,
+        Vec3(benchX - 0.7, y, benchZ - 0.4),
+        Vec3(benchX + 0.7, y + 0.85, benchZ + 0.4),
+        darkCharcoal,
+      );
+      _sphere(
+        builder,
+        Vec3(benchX - 0.35, y + 1.10, benchZ),
+        0.22,
+        cobaltColor,
+      );
+      _sphere(
+        builder,
+        Vec3(benchX + 0.35, y + 1.10, benchZ),
+        0.22,
+        emeraldColor,
+      );
+      // Stepped test cubes and wedge
+      _box(
+        builder,
+        Vec3(x + 0.9, y, z + 0.9),
+        Vec3(x + 1.4, y + 0.5, z + 1.4),
+        lightSlate,
+      );
+      _wedge(
+        builder,
+        Vec3(x + 0.9, y, z + 1.5),
+        Vec3(x + 1.4, y + 0.4, z + 2.2),
+        mediumSlate,
+        Facing.south,
+      );
+
+    default:
+      // In other test zones, place a minimalist test pedestal with calibration cube
+      _cylinder(
+        builder,
+        Vec3(x + size.x * 0.5, y, z + size.z * 0.5),
+        0.45,
+        0.6,
+        mediumSlate,
+        segments: 10,
+      );
+      _box(
+        builder,
+        Vec3(x + size.x * 0.5 - 0.15, y + 0.6, z + size.z * 0.5 - 0.15),
+        Vec3(x + size.x * 0.5 + 0.15, y + 0.9, z + size.z * 0.5 + 0.15),
+        alabasterColor,
+      );
+  }
+}
+
+/// Additional furniture proxies for the second authored furniture packet.
+/// They are deliberately simple, stable silhouettes until normalized source
+/// meshes arrive; their positions stay against walls and outside route truth.
+void _addFurniturePacket(
+  StaticMeshBuilder builder,
+  Room room,
+  Vec3 size,
+  String packet,
+) {
+  final x = room.origin.x;
+  final y = room.origin.y;
+  final z = room.origin.z;
+  const wood = 0x5A3B2A;
+  const dark = 0x38271F;
+  const fabric = 0x756879;
+  const ceramic = 0xC8BDA6;
+  switch (packet) {
+    case 'living':
+      // Wing chair with arms and a low sideboard.
+      _box(
+        builder,
+        Vec3(x + 0.45, y, z + 1.86),
+        Vec3(x + 1.18, y + 0.58, z + 2.66),
+        fabric,
+      );
+      _box(
+        builder,
+        Vec3(x + 0.34, y + 0.12, z + 1.92),
+        Vec3(x + 0.48, y + 0.78, z + 2.60),
+        wood,
+      );
+      _box(
+        builder,
+        Vec3(x + 1.15, y + 0.12, z + 1.92),
+        Vec3(x + 1.29, y + 0.78, z + 2.60),
+        wood,
+      );
+      _box(
+        builder,
+        Vec3(x + 0.52, y + 0.58, z + 1.80),
+        Vec3(x + 1.12, y + 0.72, z + 1.94),
+        dark,
+      );
+      _box(
+        builder,
+        Vec3(x + 0.35, y, z + 0.42),
+        Vec3(x + 1.95, y + 0.72, z + 0.70),
+        dark,
+      );
+      _box(
+        builder,
+        Vec3(x + 0.28, y + 0.72, z + 0.34),
+        Vec3(x + 2.02, y + 0.84, z + 0.78),
+        wood,
+      );
+      for (final drawerX in [x + 0.62, x + 1.32]) {
+        _box(
+          builder,
+          Vec3(drawerX, y + 0.25, z + 0.68),
+          Vec3(drawerX + 0.34, y + 0.29, z + 0.72),
+          ceramic,
+        );
+      }
+    case 'bedroom':
+      // Compact washstand with splashback and a ceramic basin.
+      _box(
+        builder,
+        Vec3(x + 0.35, y + 0.72, z + 0.38),
+        Vec3(x + 1.24, y + 0.84, z + 0.86),
+        dark,
+      );
+      for (final legX in [x + 0.42, x + 1.08]) {
+        _box(
+          builder,
+          Vec3(legX, y, z + 0.46),
+          Vec3(legX + 0.08, y + 0.72, z + 0.54),
+          wood,
+        );
+      }
+      _box(
+        builder,
+        Vec3(x + 0.55, y + 0.84, z + 0.47),
+        Vec3(x + 1.05, y + 0.96, z + 0.78),
+        ceramic,
+      );
+      _box(
+        builder,
+        Vec3(x + 0.42, y + 0.82, z + 0.32),
+        Vec3(x + 1.18, y + 1.58, z + 0.38),
+        wood,
+      );
+    case 'landing':
+      // A low upholstered bench under the landing wall.
+      _box(
+        builder,
+        Vec3(x + 0.64, y + 0.48, z + 0.32),
+        Vec3(x + 1.75, y + 0.72, z + 0.82),
+        fabric,
+      );
+      _box(
+        builder,
+        Vec3(x + 0.58, y + 0.72, z + 0.26),
+        Vec3(x + 1.81, y + 0.82, z + 0.88),
+        wood,
+      );
+      for (final legX in [x + 0.72, x + 1.62]) {
+        _box(
+          builder,
+          Vec3(legX, y, z + 0.40),
+          Vec3(legX + 0.08, y + 0.48, z + 0.48),
+          dark,
+        );
+      }
+    case 'bathroom':
+      // Small painted stool beside the bath.
+      _box(
+        builder,
+        Vec3(x + 1.55, y + 0.48, z + 1.72),
+        Vec3(x + 2.12, y + 0.60, z + 2.16),
+        ceramic,
+      );
+      for (final legX in [x + 1.62, x + 2.00]) {
+        _box(
+          builder,
+          Vec3(legX, y, z + 1.78),
+          Vec3(legX + 0.07, y + 0.48, z + 1.85),
+          wood,
+        );
+      }
+    case 'spare':
+      // A narrow sewing table gives the spare room a purposeful use.
+      _box(
+        builder,
+        Vec3(x + 1.30, y + 0.74, z + 2.30),
+        Vec3(x + 2.42, y + 0.86, z + 2.72),
+        wood,
+      );
+      for (final legX in [x + 1.40, x + 2.30]) {
+        _box(
+          builder,
+          Vec3(legX, y, z + 2.36),
+          Vec3(legX + 0.08, y + 0.74, z + 2.44),
+          dark,
+        );
+      }
+      _box(
+        builder,
+        Vec3(x + 1.62, y + 0.86, z + 2.39),
+        Vec3(x + 2.10, y + 0.98, z + 2.63),
+        ceramic,
+      );
+  }
+}
+
+/// Small, non-repeating occupancy cues. These are intentionally asymmetric:
+/// a house feels inhabited when each room has a different trace of a person,
+/// work, or routine rather than the same decorative scatter everywhere.
+void _addLifeDressing(StaticMeshBuilder builder, Room room, String roomKind) {
+  final x = room.origin.x;
+  final y = room.origin.y;
+  final z = room.origin.z;
+  const wood = 0x5A3B2A;
+  const dark = 0x38271F;
+  const ceramic = 0xC8BDA6;
+  const fabric = 0x756879;
+  const iron = 0x343330;
+  switch (roomKind) {
+    case 'living':
+      // A slightly lopsided fern and pot break up the otherwise formal room.
+      _box(
+        builder,
+        Vec3(x + 0.42, y, z + 3.24),
+        Vec3(x + 0.82, y + 0.26, z + 3.62),
+        ceramic,
+      );
+      for (var i = 0; i < 4; i++) {
+        _box(
+          builder,
+          Vec3(x + 0.57 + i * 0.05, y + 0.25, z + 3.34 - i * 0.04),
+          Vec3(x + 0.62 + i * 0.05, y + 0.92 - i * 0.07, z + 3.39 - i * 0.04),
+          fabric,
+        );
+      }
+    case 'hall':
+      // Three mismatched framed photographs beside the entrance.
+      for (var i = 0; i < 3; i++) {
+        final frameX = x + 1.62 + i * 0.38;
+        _box(
+          builder,
+          Vec3(frameX, y + 1.88 + (i % 2) * 0.10, z + 0.04),
+          Vec3(frameX + 0.25, y + 2.24 + (i % 2) * 0.10, z + 0.10),
+          wood,
+        );
+        _box(
+          builder,
+          Vec3(frameX + 0.045, y + 1.94 + (i % 2) * 0.10, z + 0.10),
+          Vec3(frameX + 0.205, y + 2.16 + (i % 2) * 0.10, z + 0.12),
+          ceramic,
+        );
+      }
+    case 'kitchen':
+      // A hanging tea towel and a pair of hooks at the work end.
+      _box(
+        builder,
+        Vec3(x + 2.98, y + 1.10, z + 2.82),
+        Vec3(x + 3.05, y + 1.72, z + 2.88),
+        iron,
+      );
+      _box(
+        builder,
+        Vec3(x + 2.72, y + 0.82, z + 2.84),
+        Vec3(x + 3.20, y + 1.15, z + 2.90),
+        fabric,
+      );
+      for (final hookX in [x + 2.42, x + 2.72]) {
+        _box(
+          builder,
+          Vec3(hookX, y + 1.38, z + 2.80),
+          Vec3(hookX + 0.06, y + 1.48, z + 2.88),
+          iron,
+        );
+      }
+    case 'cellar':
+      // A crate of bottles makes the service space feel recently used.
+      _box(
+        builder,
+        Vec3(x + 2.82, y, z + 2.72),
+        Vec3(x + 3.62, y + 0.58, z + 3.48),
+        wood,
+      );
+      for (var i = 0; i < 4; i++) {
+        final bottleX = x + 2.96 + (i % 2) * 0.32;
+        final bottleZ = z + 2.90 + (i ~/ 2) * 0.32;
+        _box(
+          builder,
+          Vec3(bottleX, y + 0.52, bottleZ),
+          Vec3(bottleX + 0.12, y + 0.88, bottleZ + 0.12),
+          dark,
+        );
+      }
+    case 'bedroom':
+      // Slippers left at the bedside, deliberately not centered or mirrored.
+      for (final slipperX in [x + 0.62, x + 0.86]) {
+        _box(
+          builder,
+          Vec3(slipperX, y + 0.02, z + 1.28),
+          Vec3(slipperX + 0.18, y + 0.10, z + 1.62),
+          fabric,
+        );
+      }
+    case 'bathroom':
+      // A folded towel hangs from a simple iron rail near the basin.
+      _box(
+        builder,
+        Vec3(x + 0.34, y + 1.26, z + 2.22),
+        Vec3(x + 1.24, y + 1.32, z + 2.28),
+        iron,
+      );
+      _box(
+        builder,
+        Vec3(x + 0.48, y + 0.82, z + 2.24),
+        Vec3(x + 1.10, y + 1.26, z + 2.30),
+        fabric,
+      );
+  }
+}
+
+/// A small period under-stair cupboard gives the hall a believable service
+/// volume without pretending it is a ninth navigable room in the canonical
+/// topology. Its door, dark reveal, shelves, and latch are view-only; the
+/// stair clearance and collision graph remain authoritative.
+void _addUnderStairCupboard(
+  StaticMeshBuilder builder,
+  House house,
+  Room room,
+  Vec3 size,
+  int wood,
+  int iron,
+) {
+  if (house.stairs.isEmpty) return;
+  final stair = house.stairs.first;
+  final x0 = stair.min.x + 0.24;
+  final x1 = stair.max.x - 0.24;
+  final z0 =
+      stair.max.z -
+      _min(
+            1,
+            (room.origin.y + size.y - 0.18 - room.origin.y - 0.10) /
+                (stair.max.y - stair.min.y),
+          ) *
+          (stair.max.z - stair.min.z) +
+      0.28;
+  final z1 = _min(stair.max.z - 0.72, z0 + 1.02);
+  if (z1 <= z0) return;
+  const reveal = 0x241F1B;
+  const frame = 0x6A4935;
+  const door = 0x4A3025;
+  const panel = 0x59392B;
+  // Recessed dark interior and a shallow shelf hint establish actual depth
+  // behind the door without adding a collision volume to the stair throat.
+  _box(
+    builder,
+    Vec3(x0 + 0.03, room.origin.y + 0.10, z0 + 0.03),
+    Vec3(x1 - 0.03, room.origin.y + 1.72, z1 - 0.03),
+    reveal,
+  );
+  _box(
+    builder,
+    Vec3(x0 + 0.18, room.origin.y + 0.92, z0 + 0.08),
+    Vec3(x1 - 0.18, room.origin.y + 0.98, z1 - 0.08),
+    wood,
+  );
+  // The cupboard faces the clear west side of the hall.
+  final faceX = x0 - 0.055;
+  _box(
+    builder,
+    Vec3(faceX - 0.06, room.origin.y + 0.08, z0 - 0.08),
+    Vec3(faceX, room.origin.y + 1.86, z1 + 0.08),
+    frame,
+  );
+  _box(
+    builder,
+    Vec3(faceX - 0.075, room.origin.y + 0.18, z0 + 0.08),
+    Vec3(faceX - 0.005, room.origin.y + 1.72, z1 - 0.08),
+    door,
+  );
+  for (final panelZ in [z0 + 0.20, z0 + 0.63]) {
+    _box(
+      builder,
+      Vec3(faceX - 0.088, room.origin.y + 0.28, panelZ),
+      Vec3(faceX - 0.006, room.origin.y + 0.57, panelZ + 0.27),
+      panel,
+    );
+  }
+  _box(
+    builder,
+    Vec3(faceX - 0.11, room.origin.y + 1.72, z0 - 0.10),
+    Vec3(faceX + 0.01, room.origin.y + 1.84, z1 + 0.10),
+    frame,
+  );
+  _box(
+    builder,
+    Vec3(faceX - 0.12, room.origin.y + 0.90, z0 + 0.52),
+    Vec3(faceX - 0.08, room.origin.y + 0.99, z0 + 0.61),
+    iron,
+  );
+}
+
+void _addStairRun(
+  StaticMeshBuilder builder,
+  House house,
+  Room room,
+  Vec3 size,
+  int wood,
+  int iron,
+) {
+  if (house.stairs.isEmpty) return;
+  const darkWood = 0x38271F;
+  final stair = house.stairs.first;
+  final min = stair.min;
+  final max = stair.max;
+  // Use a human-scale riser target and derive the count from the authored
+  // opening. The old fixed 18 boxes produced visibly uneven, floating treads
+  // whenever the room height or house scale changed.
+  const targetRiser = 0.18;
+  final x0 = min.x + 0.12;
+  final x1 = max.x - 0.12;
+  final topY = _min(max.y, room.origin.y + size.y - 0.18);
+  final runHeight = _max(0.1, topY - room.origin.y - 0.10);
+  final runFraction = _min(1, runHeight / (max.y - min.y));
+  final endZ = max.z - runFraction * (max.z - min.z);
+  final stepCount = _max(
+    1.0,
+    (runHeight / targetRiser).roundToDouble(),
+  ).round();
+  final riser = runHeight / stepCount;
+  final tread = (max.z - endZ) / stepCount;
+  final baseY = room.origin.y + 0.10;
+  for (var i = 0; i < stepCount; i++) {
+    final stepY = baseY + (i + 1) * riser;
+    final stepZ = max.z - (i + 1) * tread;
+    _box(
+      builder,
+      // Closed risers fill the wedge below each tread, removing the old
+      // floating-step gaps and giving the stair a believable timber carcass.
+      Vec3(x0, baseY, stepZ),
+      Vec3(x1, stepY, stepZ + tread),
+      wood,
+    );
+  }
+  _box(
+    builder,
+    Vec3(x0 - 0.10, room.origin.y + 0.08, endZ),
+    Vec3(x0, room.origin.y + 0.34, max.z),
+    darkWood,
+  );
+  _box(
+    builder,
+    Vec3(x1, room.origin.y + 0.08, endZ),
+    Vec3(x1 + 0.10, room.origin.y + 0.34, max.z),
+    darkWood,
+  );
+  // A compact handrail kit: square newels at both ends and regularly spaced
+  // balusters keep the flight readable without stealing the hall route.
+  final railX0 = x1 + 0.16;
+  final railX1 = x1 + 0.25;
+  final railBase = room.origin.y + 0.82;
+  final railTop = _min(topY + 0.78, room.origin.y + size.y - 0.12);
+  _box(
+    builder,
+    Vec3(railX0, room.origin.y + 0.08, max.z - 0.12),
+    Vec3(railX1, railBase + 0.12, max.z + 0.02),
+    darkWood,
+  );
+  _box(
+    builder,
+    Vec3(railX0, _max(room.origin.y + 0.08, railTop - 0.86), endZ - 0.02),
+    Vec3(railX1, railTop, endZ + 0.12),
+    darkWood,
+  );
+  const balusterCount = 5;
+  for (var i = 0; i <= balusterCount; i++) {
+    final t = i / balusterCount;
+    final z = max.z - t * (max.z - endZ);
+    final y = railBase + t * (railTop - railBase);
+    _box(
+      builder,
+      Vec3(railX0 + 0.01, y - 0.70, z - 0.025),
+      Vec3(railX1 - 0.01, y, z + 0.025),
+      iron,
+    );
+  }
+  _box(
+    builder,
+    Vec3(railX0 - 0.05, railTop - 0.08, endZ - 0.08),
+    Vec3(railX1 + 0.05, railTop + 0.08, endZ + 0.08),
+    darkWood,
+  );
+}
+
+void _addWall(
+  StaticMeshBuilder builder,
+  House house,
+  Room room,
+  Vec3 size,
+  Facing facing,
+) {
+  final width = facing == Facing.north || facing == Facing.south
+      ? size.x
+      : size.z;
+  final openings = <_Opening>[
+    for (final portal in house.portalsFor(room.id))
+      if (!portal.stair && portal.facingFor(room.id) == facing)
+        _Opening(
+          portal.offsetFor(room.id),
+          portal.offsetFor(room.id) + portal.width,
+          0,
+          portal.height,
+        ),
+    for (final window in room.windows)
+      if (window.facing == facing)
+        _Opening(
+          window.offset,
+          window.offset + window.w,
+          window.sill,
+          window.sill + window.h,
+        ),
+  ];
+  final horizontal = <double>{
+    0,
+    width,
+    for (final opening in openings) ...[opening.u0, opening.u1],
+  }.toList()..sort();
+  final vertical = <double>{
+    0,
+    size.y,
+    for (final opening in openings) ...[opening.v0, opening.v1],
+  }.toList()..sort();
+  for (var u = 0; u + 1 < horizontal.length; u++) {
+    for (var v = 0; v + 1 < vertical.length; v++) {
+      final u0 = horizontal[u], u1 = horizontal[u + 1];
+      final v0 = vertical[v], v1 = vertical[v + 1];
+      if (openings.any(
+        (opening) => opening.contains((u0 + u1) * 0.5, (v0 + v1) * 0.5),
+      )) {
+        continue;
+      }
+      _wallQuad(builder, room, size, facing, u0, u1, v0, v1);
+    }
+  }
+  _addWallDetails(builder, room, size, facing, width, openings);
+}
+
+void _addWallDetails(
+  StaticMeshBuilder builder,
+  Room room,
+  Vec3 size,
+  Facing facing,
+  double width,
+  List<_Opening> openings,
+) {
+  // Sparse test chambers are a renderer laboratory, not a furnished period
+  // house. Keep the structural wall/opening mesh above, but omit trim, sash,
+  // rails, and dressing so unfinished proxy detail cannot dominate captures.
+  if (sparseTestChambers) return;
+  if (room.id == 'cellar') return;
+
+  final publicRoom = room.id == 'living-room' || room.id == 'hall';
+  final privateRoom =
+      room.id == 'bedroom' || room.id == 'landing' || room.id == 'spare-room';
+  final trimColor = publicRoom
+      ? 0xC8BDA6
+      : privateRoom
+      ? 0xBEB5A3
+      : 0xB2AC9F;
+
+  _addClippedBand(
+    builder,
+    room,
+    size,
+    facing,
+    width,
+    openings,
+    0.02,
+    0.17,
+    0.032,
+    trimColor,
+  );
+  if (publicRoom || room.id == 'landing') {
+    _addClippedBand(
+      builder,
+      room,
+      size,
+      facing,
+      width,
+      openings,
+      0.88,
+      0.94,
+      0.022,
+      trimColor,
+    );
+  }
+  if (publicRoom || room.id == 'bedroom') {
+    final railBottom = size.y - 0.58;
+    _addClippedBand(
+      builder,
+      room,
+      size,
+      facing,
+      width,
+      openings,
+      railBottom,
+      railBottom + 0.055,
+      0.022,
+      trimColor,
+    );
+  }
+  _addClippedBand(
+    builder,
+    room,
+    size,
+    facing,
+    width,
+    openings,
+    size.y - (publicRoom ? 0.13 : 0.09),
+    size.y - 0.012,
+    publicRoom ? 0.055 : 0.038,
+    trimColor,
+  );
+
+  for (final opening in openings) {
+    _addOpeningTrim(builder, room, size, facing, width, opening, trimColor);
+  }
+  for (final window in room.windows.where(
+    (window) => window.facing == facing,
+  )) {
+    _addWindowSashDetail(builder, room, size, facing, window, trimColor);
+  }
+}
+
+/// Adds the visible working parts of a period sash without filling the
+/// opening with opaque geometry. The bars and projecting sill remain render
+/// detail only; the authored wall opening is still the collision authority.
+void _addWindowSashDetail(
+  StaticMeshBuilder builder,
+  Room room,
+  Vec3 size,
+  Facing facing,
+  Window window,
+  int trimColor,
+) {
+  final u0 = window.offset;
+  final u1 = window.offset + window.w;
+  final v0 = window.sill;
+  final v1 = window.sill + window.h;
+  final barColor = window.frosted ? 0xA49D90 : trimColor;
+  const bar = 0.035;
+  _wallBox(
+    builder,
+    room,
+    size,
+    facing,
+    (u0 + u1) * 0.5 - bar * 0.5,
+    (u0 + u1) * 0.5 + bar * 0.5,
+    v0,
+    v1,
+    0.032,
+    barColor,
+  );
+  _wallBox(
+    builder,
+    room,
+    size,
+    facing,
+    u0,
+    u1,
+    (v0 + v1) * 0.5 - bar * 0.5,
+    (v0 + v1) * 0.5 + bar * 0.5,
+    0.032,
+    barColor,
+  );
+  final sillDepth = facing == Facing.north || facing == Facing.south
+      ? 0.11
+      : 0.14;
+  _wallBox(
+    builder,
+    room,
+    size,
+    facing,
+    _max(0, u0 - 0.07),
+    _min(
+      facing == Facing.north || facing == Facing.south ? size.x : size.z,
+      u1 + 0.07,
+    ),
+    _max(0.018, v0 - 0.055),
+    v0,
+    sillDepth,
+    trimColor,
+  );
+  if (window.frosted) {
+    // A narrow lower glazing rail makes the bathroom window read as frosted
+    // rather than a missing pane while keeping the opening traversable.
+    _wallBox(
+      builder,
+      room,
+      size,
+      facing,
+      u0 + 0.05,
+      u1 - 0.05,
+      v0 + 0.06,
+      v0 + 0.09,
+      0.025,
+      0xD0CCC0,
+    );
+  }
+  _addWindowDressing(builder, room, size, facing, window, trimColor);
+}
+
+/// Adds restrained period curtains without turning the glazing into an opaque
+/// wall. The rod, side drops, and tie-backs are authored as view-only pieces;
+/// the canonical opening remains unchanged for light, focus, and traversal.
+void _addWindowDressing(
+  StaticMeshBuilder builder,
+  Room room,
+  Vec3 size,
+  Facing facing,
+  Window window,
+  int trimColor,
+) {
+  if (room.id == 'hall' || window.frosted || window.h < 1.0) return;
+  final wallWidth = facing == Facing.north || facing == Facing.south
+      ? size.x
+      : size.z;
+  final u0 = window.offset;
+  final u1 = window.offset + window.w;
+  final rodBottom = _min(size.y - 0.16, window.sill + window.h + 0.08);
+  final rodTop = _min(size.y - 0.11, rodBottom + 0.045);
+  final rodColor = room.id == 'spare-room' ? 0x4D4036 : 0x6D5745;
+  final fabric = room.id == 'kitchen' ? 0xA79B89 : 0x756879;
+  _wallBox(
+    builder,
+    room,
+    size,
+    facing,
+    _max(0, u0 - 0.13),
+    _min(wallWidth, u1 + 0.13),
+    rodBottom,
+    rodTop,
+    0.055,
+    rodColor,
+  );
+  final panelBottom = _max(0.24, window.sill - 0.18);
+  final panelTop = _min(size.y - 0.20, window.sill + window.h + 0.03);
+  final left0 = _max(0, u0 - 0.11);
+  final left1 = _min(wallWidth, u0 + 0.10);
+  final right0 = _max(0, u1 - 0.10);
+  final right1 = _min(wallWidth, u1 + 0.11);
+  if (panelTop > panelBottom) {
+    _wallBox(
+      builder,
+      room,
+      size,
+      facing,
+      left0,
+      left1,
+      panelBottom,
+      panelTop,
+      0.045,
+      fabric,
+    );
+    _wallBox(
+      builder,
+      room,
+      size,
+      facing,
+      right0,
+      right1,
+      panelBottom,
+      panelTop,
+      0.045,
+      fabric,
+    );
+    final tieY = panelBottom + (panelTop - panelBottom) * 0.55;
+    const tie = 0.035;
+    _wallBox(
+      builder,
+      room,
+      size,
+      facing,
+      _max(left0, left1 - tie),
+      left1,
+      tieY - tie,
+      tieY + tie,
+      0.065,
+      trimColor,
+    );
+    _wallBox(
+      builder,
+      room,
+      size,
+      facing,
+      right0,
+      _min(right1, right0 + tie),
+      tieY - tie,
+      tieY + tie,
+      0.065,
+      trimColor,
+    );
+  }
+}
+
+void _addClippedBand(
+  StaticMeshBuilder builder,
+  Room room,
+  Vec3 size,
+  Facing facing,
+  double wallWidth,
+  List<_Opening> openings,
+  double v0,
+  double v1,
+  double depth,
+  int color,
+) {
+  if (v0 < 0 || v1 > size.y || v1 <= v0) return;
+  for (final span in _uncoveredSpans(wallWidth, openings, v0, v1)) {
+    if (span.u1 - span.u0 < 0.025) continue;
+    _wallBox(
+      builder,
+      room,
+      size,
+      facing,
+      span.u0,
+      span.u1,
+      v0,
+      v1,
+      depth,
+      color,
+    );
+  }
+}
+
+List<_Span> _uncoveredSpans(
+  double width,
+  List<_Opening> openings,
+  double v0,
+  double v1,
+) {
+  var spans = <_Span>[_Span(0, width)];
+  for (final opening in openings) {
+    if (opening.v1 <= v0 || opening.v0 >= v1) continue;
+    final next = <_Span>[];
+    for (final span in spans) {
+      if (opening.u1 <= span.u0 || opening.u0 >= span.u1) {
+        next.add(span);
+        continue;
+      }
+      if (opening.u0 > span.u0) {
+        next.add(_Span(span.u0, opening.u0));
+      }
+      if (opening.u1 < span.u1) {
+        next.add(_Span(opening.u1, span.u1));
+      }
+    }
+    spans = next;
+  }
+  return spans;
+}
+
+void _addOpeningTrim(
+  StaticMeshBuilder builder,
+  Room room,
+  Vec3 size,
+  Facing facing,
+  double wallWidth,
+  _Opening opening,
+  int color,
+) {
+  const frame = 0.075;
+  const depth = 0.04;
+  final left = _max(0, opening.u0 - frame);
+  final right = _min(wallWidth, opening.u1 + frame);
+  final bottom = _max(0.018, opening.v0);
+  final top = _min(size.y - 0.012, opening.v1 + frame);
+  if (opening.u0 > 0) {
+    _wallBox(
+      builder,
+      room,
+      size,
+      facing,
+      left,
+      opening.u0,
+      bottom,
+      top,
+      depth,
+      color,
+    );
+  }
+  if (opening.u1 < wallWidth) {
+    _wallBox(
+      builder,
+      room,
+      size,
+      facing,
+      opening.u1,
+      right,
+      bottom,
+      top,
+      depth,
+      color,
+    );
+  }
+  if (opening.v1 < size.y) {
+    _wallBox(
+      builder,
+      room,
+      size,
+      facing,
+      left,
+      right,
+      opening.v1,
+      top,
+      depth,
+      color,
+    );
+  }
+  if (opening.v0 > 0) {
+    _wallBox(
+      builder,
+      room,
+      size,
+      facing,
+      left,
+      right,
+      _max(0, opening.v0 - frame),
+      opening.v0,
+      depth + 0.025,
+      color,
+    );
+  }
+}
+
+void _addCeilingOrnament(StaticMeshBuilder builder, Room room, Vec3 size) {
+  final centerX = room.origin.x + size.x * 0.5;
+  final centerZ = room.origin.z + size.z * 0.5;
+  final ceilingY = room.origin.y + size.y;
+  if (room.id != 'living-room' && room.id != 'hall' && room.id != 'bedroom') {
+    if (!const {
+      'kitchen',
+      'landing',
+      'bathroom',
+      'spare-room',
+    }.contains(room.id)) {
+      return;
+    }
+    final fixtureX = room.id == 'kitchen'
+        ? room.origin.x + size.x * 0.58
+        : centerX;
+    final fixtureZ = room.id == 'bathroom'
+        ? room.origin.z + size.z * 0.42
+        : centerZ;
+    final stemBottom = _max(room.origin.y + 1.55, ceilingY - 0.58);
+    _box(
+      builder,
+      Vec3(fixtureX - 0.025, stemBottom, fixtureZ - 0.025),
+      Vec3(fixtureX + 0.025, ceilingY - 0.08, fixtureZ + 0.025),
+      0x403B34,
+    );
+    _box(
+      builder,
+      Vec3(fixtureX - 0.14, stemBottom - 0.10, fixtureZ - 0.14),
+      Vec3(fixtureX + 0.14, stemBottom, fixtureZ + 0.14),
+      room.id == 'bathroom' ? 0xC4BFB3 : 0x746051,
+    );
+    _box(
+      builder,
+      Vec3(fixtureX - 0.09, stemBottom - 0.16, fixtureZ - 0.09),
+      Vec3(fixtureX + 0.09, stemBottom - 0.10, fixtureZ + 0.09),
+      0xB8AA93,
+    );
+    return;
+  }
+  final color = room.id == 'living-room' ? 0xD1C7B4 : 0xC6BDAA;
+  _box(
+    builder,
+    Vec3(centerX - 0.24, ceilingY - 0.018, centerZ - 0.24),
+    Vec3(centerX + 0.24, ceilingY, centerZ + 0.24),
+    color,
+  );
+  _box(
+    builder,
+    Vec3(centerX - 0.15, ceilingY - 0.034, centerZ - 0.15),
+    Vec3(centerX + 0.15, ceilingY - 0.018, centerZ + 0.15),
+    color,
+  );
+  _box(
+    builder,
+    Vec3(centerX - 0.055, ceilingY - 0.048, centerZ - 0.055),
+    Vec3(centerX + 0.055, ceilingY - 0.034, centerZ + 0.055),
+    color,
+  );
+}
+
+void _wallBox(
+  StaticMeshBuilder builder,
+  Room room,
+  Vec3 size,
+  Facing facing,
+  double u0,
+  double u1,
+  double v0,
+  double v1,
+  double depth,
+  int color,
+) {
+  final x = room.origin.x;
+  final y = room.origin.y;
+  final z = room.origin.z;
+  switch (facing) {
+    case Facing.north:
+      _box(
+        builder,
+        Vec3(x + u0, y + v0, z),
+        Vec3(x + u1, y + v1, z + depth),
+        color,
+      );
+      return;
+    case Facing.south:
+      _box(
+        builder,
+        Vec3(x + u0, y + v0, z + size.z - depth),
+        Vec3(x + u1, y + v1, z + size.z),
+        color,
+      );
+      return;
+    case Facing.east:
+      _box(
+        builder,
+        Vec3(x + size.x - depth, y + v0, z + u0),
+        Vec3(x + size.x, y + v1, z + u1),
+        color,
+      );
+      return;
+    case Facing.west:
+      _box(
+        builder,
+        Vec3(x, y + v0, z + u0),
+        Vec3(x + depth, y + v1, z + u1),
+        color,
+      );
+      return;
+  }
+}
+
+void _box(StaticMeshBuilder builder, Vec3 min, Vec3 max, int color) {
+  final p000 = Vec3(min.x, min.y, min.z);
+  final p100 = Vec3(max.x, min.y, min.z);
+  final p110 = Vec3(max.x, max.y, min.z);
+  final p010 = Vec3(min.x, max.y, min.z);
+  final p001 = Vec3(min.x, min.y, max.z);
+  final p101 = Vec3(max.x, min.y, max.z);
+  final p111 = Vec3(max.x, max.y, max.z);
+  final p011 = Vec3(min.x, max.y, max.z);
+  builder
+    ..quad(p100, p000, p010, p110, color)
+    ..quad(p001, p101, p111, p011, color)
+    ..quad(p000, p001, p011, p010, color)
+    ..quad(p101, p100, p110, p111, color)
+    ..quad(p000, p100, p101, p001, color)
+    ..quad(p010, p011, p111, p110, color);
+}
+
+void _cylinder(
+  StaticMeshBuilder builder,
+  Vec3 baseCenter,
+  double radius,
+  double height,
+  int color, {
+  int segments = 12,
+  bool glow = false,
+}) {
+  final step = (math.pi * 2.0) / segments;
+  final topCenter = Vec3(baseCenter.x, baseCenter.y + height, baseCenter.z);
+  for (var i = 0; i < segments; i++) {
+    final a0 = i * step;
+    final a1 = (i + 1) * step;
+    final cos0 = math.cos(a0);
+    final sin0 = math.sin(a0);
+    final cos1 = math.cos(a1);
+    final sin1 = math.sin(a1);
+
+    final b0 = Vec3(
+      baseCenter.x + cos0 * radius,
+      baseCenter.y,
+      baseCenter.z + sin0 * radius,
+    );
+    final b1 = Vec3(
+      baseCenter.x + cos1 * radius,
+      baseCenter.y,
+      baseCenter.z + sin1 * radius,
+    );
+    final t0 = Vec3(
+      topCenter.x + cos0 * radius,
+      topCenter.y,
+      topCenter.z + sin0 * radius,
+    );
+    final t1 = Vec3(
+      topCenter.x + cos1 * radius,
+      topCenter.y,
+      topCenter.z + sin1 * radius,
+    );
+
+    // Wall quad
+    builder.quad(b0, b1, t1, t0, color, glow: glow);
+    // Top cap quad
+    builder.quad(topCenter, topCenter, t1, t0, color, glow: glow);
+    // Bottom cap quad
+    builder.quad(baseCenter, b0, b1, baseCenter, color, glow: glow);
+  }
+}
+
+void _sphere(
+  StaticMeshBuilder builder,
+  Vec3 center,
+  double radius,
+  int color, {
+  int latBands = 8,
+  int longBands = 12,
+  bool glow = false,
+}) {
+  for (var lat = 0; lat < latBands; lat++) {
+    final theta0 = (lat / latBands) * math.pi;
+    final theta1 = ((lat + 1) / latBands) * math.pi;
+    final sinT0 = math.sin(theta0);
+    final cosT0 = math.cos(theta0);
+    final sinT1 = math.sin(theta1);
+    final cosT1 = math.cos(theta1);
+
+    for (var lon = 0; lon < longBands; lon++) {
+      final phi0 = (lon / longBands) * math.pi * 2.0;
+      final phi1 = ((lon + 1) / longBands) * math.pi * 2.0;
+      final cosP0 = math.cos(phi0);
+      final sinP0 = math.sin(phi0);
+      final cosP1 = math.cos(phi1);
+      final sinP1 = math.sin(phi1);
+
+      final p00 = Vec3(
+        center.x + radius * sinT0 * cosP0,
+        center.y + radius * cosT0,
+        center.z + radius * sinT0 * sinP0,
+      );
+      final p10 = Vec3(
+        center.x + radius * sinT0 * cosP1,
+        center.y + radius * cosT0,
+        center.z + radius * sinT0 * sinP1,
+      );
+      final p11 = Vec3(
+        center.x + radius * sinT1 * cosP1,
+        center.y + radius * cosT1,
+        center.z + radius * sinT1 * sinP1,
+      );
+      final p01 = Vec3(
+        center.x + radius * sinT1 * cosP0,
+        center.y + radius * cosT1,
+        center.z + radius * sinT1 * sinP0,
+      );
+
+      builder.quad(p00, p10, p11, p01, color, glow: glow);
+    }
+  }
+}
+
+void _wedge(
+  StaticMeshBuilder builder,
+  Vec3 min,
+  Vec3 max,
+  int color,
+  Facing slopeFacing,
+) {
+  final p000 = Vec3(min.x, min.y, min.z);
+  final p100 = Vec3(max.x, min.y, min.z);
+  final p110 = Vec3(max.x, max.y, min.z);
+  final p010 = Vec3(min.x, max.y, min.z);
+  final p001 = Vec3(min.x, min.y, max.z);
+  final p101 = Vec3(max.x, min.y, max.z);
+  final p111 = Vec3(max.x, max.y, max.z);
+  final p011 = Vec3(min.x, max.y, max.z);
+
+  // Floor
+  builder.quad(p000, p100, p101, p001, color);
+
+  switch (slopeFacing) {
+    case Facing.north:
+      builder.quad(p001, p101, p110, p010, color);
+      builder.quad(p100, p000, p010, p110, color);
+      builder.quad(p000, p001, p010, p010, color);
+      builder.quad(p101, p100, p110, p110, color);
+    case Facing.south:
+      builder.quad(p100, p000, p011, p111, color);
+      builder.quad(p001, p101, p111, p011, color);
+      builder.quad(p000, p001, p011, p000, color);
+      builder.quad(p101, p100, p100, p111, color);
+    case Facing.east:
+      builder.quad(p000, p001, p111, p110, color);
+      builder.quad(p101, p100, p110, p111, color);
+      builder.quad(p100, p000, p000, p110, color);
+      builder.quad(p001, p101, p111, p001, color);
+    case Facing.west:
+      builder.quad(p101, p100, p010, p011, color);
+      builder.quad(p000, p001, p011, p010, color);
+      builder.quad(p100, p000, p010, p100, color);
+      builder.quad(p001, p101, p101, p011, color);
+  }
+}
+
+void _pyramid(
+  StaticMeshBuilder builder,
+  Vec3 baseCenter,
+  double baseSize,
+  double height,
+  int color, {
+  bool glow = false,
+}) {
+  final half = baseSize * 0.5;
+  final apex = Vec3(baseCenter.x, baseCenter.y + height, baseCenter.z);
+  final p0 = Vec3(baseCenter.x - half, baseCenter.y, baseCenter.z - half);
+  final p1 = Vec3(baseCenter.x + half, baseCenter.y, baseCenter.z - half);
+  final p2 = Vec3(baseCenter.x + half, baseCenter.y, baseCenter.z + half);
+  final p3 = Vec3(baseCenter.x - half, baseCenter.y, baseCenter.z + half);
+
+  builder.quad(p0, p1, p2, p3, color, glow: glow);
+  builder.quad(p0, p1, apex, apex, color, glow: glow);
+  builder.quad(p1, p2, apex, apex, color, glow: glow);
+  builder.quad(p2, p3, apex, apex, color, glow: glow);
+  builder.quad(p3, p0, apex, apex, color, glow: glow);
+}
+
+void _steppedPlatform(
+  StaticMeshBuilder builder,
+  Vec3 origin,
+  double width,
+  double stepDepth,
+  double stepHeight,
+  int stepCount,
+  int color,
+) {
+  for (var i = 0; i < stepCount; i++) {
+    final curZ = origin.z + i * stepDepth;
+    final curH = (i + 1) * stepHeight;
+    _box(
+      builder,
+      Vec3(origin.x, origin.y, curZ),
+      Vec3(origin.x + width, origin.y + curH, curZ + stepDepth),
+      color,
+    );
+  }
+}
+
+double _min(double a, double b) => a < b ? a : b;
+double _max(double a, double b) => a > b ? a : b;
+
+void _wallQuad(
+  StaticMeshBuilder builder,
+  Room room,
+  Vec3 size,
+  Facing facing,
+  double u0,
+  double u1,
+  double v0,
+  double v1,
+) {
+  final x = room.origin.x;
+  final y = room.origin.y;
+  final z = room.origin.z;
+  final a = switch (facing) {
+    Facing.north => Vec3(x + u0, y + v0, z),
+    Facing.south => Vec3(x + u1, y + v0, z + size.z),
+    Facing.east => Vec3(x + size.x, y + v1, z + u1),
+    Facing.west => Vec3(x, y + v1, z + u0),
+  };
+  final b = switch (facing) {
+    Facing.north => Vec3(x + u1, y + v0, z),
+    Facing.south => Vec3(x + u0, y + v0, z + size.z),
+    Facing.east => Vec3(x + size.x, y + v1, z + u0),
+    Facing.west => Vec3(x, y + v1, z + u1),
+  };
+  final c = switch (facing) {
+    Facing.north => Vec3(x + u1, y + v1, z),
+    Facing.south => Vec3(x + u0, y + v1, z + size.z),
+    Facing.east => Vec3(x + size.x, y + v0, z + u0),
+    Facing.west => Vec3(x, y + v0, z + u1),
+  };
+  final d = switch (facing) {
+    Facing.north => Vec3(x + u0, y + v1, z),
+    Facing.south => Vec3(x + u1, y + v1, z + size.z),
+    Facing.east => Vec3(x + size.x, y + v0, z + u1),
+    Facing.west => Vec3(x, y + v0, z + u0),
+  };
+  // Keep an authored UV-bearing interior face on top of the structural wall
+  // volume. The tiny room-side offset avoids z-fighting with the box cap while
+  // leaving the collision plane and exterior thickness unchanged.
+  const inset = 0.003;
+  final roomSide = switch (facing) {
+    Facing.north => Vec3(0, 0, inset),
+    Facing.south => Vec3(0, 0, -inset),
+    Facing.east => Vec3(-inset, 0, 0),
+    Facing.west => Vec3(inset, 0, 0),
+  };
+  final material = HouseSurfaceMaterials.forId(room.surfaceWall);
+  builder.quad(
+    a + roomSide,
+    b + roomSide,
+    c + roomSide,
+    d + roomSide,
+    HouseSurfaceMaterials.forId(room.surfaceWall).tint,
+    uScale: (u1 - u0) / material.uvMetres,
+    vScale: (v1 - v0) / material.uvMetres,
+  );
+  // Keep the canonical interior face at the room boundary, then cap a real
+  // structural section outward. This gives every wall visible reveal/contact
+  // thickness while preserving the collision planes used by simulation.
+  final thickness = _wallThickness(room, facing);
+  final min = switch (facing) {
+    Facing.north => Vec3(a.x, a.y, a.z - thickness),
+    Facing.south => Vec3(b.x, a.y, a.z),
+    Facing.east => Vec3(a.x, a.y, d.z),
+    Facing.west => Vec3(a.x - thickness, a.y, a.z),
+  };
+  final max = switch (facing) {
+    Facing.north => Vec3(b.x, c.y, a.z),
+    Facing.south => Vec3(a.x, c.y, a.z + thickness),
+    Facing.east => Vec3(a.x + thickness, c.y, b.z),
+    Facing.west => Vec3(d.x, c.y, b.z),
+  };
+  _box(
+    builder,
+    min,
+    max,
+    _shade(HouseSurfaceMaterials.forId(room.surfaceWall).tint, 0.68),
+  );
+}
+
+int _shade(int rgb, double factor) {
+  int channel(int value) => (value * factor).round().clamp(0, 255);
+  return (channel((rgb >> 16) & 0xff) << 16) |
+      (channel((rgb >> 8) & 0xff) << 8) |
+      channel(rgb & 0xff);
+}
+
+double _wallThickness(Room room, Facing facing) {
+  final atOuterEdge = switch (facing) {
+    Facing.west => room.origin.x == 0,
+    Facing.north => room.origin.z == 0,
+    Facing.east =>
+      (room.origin.x + room.size.x - 10.5 * houseModelScale).abs() < 0.001,
+    Facing.south =>
+      (room.origin.z + room.size.z - 10.5 * houseModelScale).abs() < 0.001,
+  };
+  return atOuterEdge ? houseExteriorWallThickness : housePartitionWallThickness;
+}
+
+void _addDoorFrame(
+  StaticMeshBuilder builder,
+  Room room,
+  Vec3 size,
+  Portal portal, {
+  bool includeLeaf = true,
+}) {
+  final facing = portal.facingFor(room.id);
+  final u0 = portal.offsetFor(room.id);
+  final u1 = u0 + portal.width;
+  final y = room.origin.y;
+  final frame = 0.075;
+  final depth = 0.12;
+  final frameColor = _doorFrameColor(portal);
+  final top = _min(size.y, portal.height);
+  switch (facing) {
+    case Facing.north:
+      _box(
+        builder,
+        Vec3(room.origin.x + _max(0, u0 - frame), y, room.origin.z),
+        Vec3(room.origin.x + u0, y + top, room.origin.z + depth),
+        frameColor,
+      );
+      _box(
+        builder,
+        Vec3(room.origin.x + u1, y, room.origin.z),
+        Vec3(
+          room.origin.x + _min(size.x, u1 + frame),
+          y + top,
+          room.origin.z + depth,
+        ),
+        frameColor,
+      );
+      _box(
+        builder,
+        Vec3(
+          room.origin.x + _max(0, u0 - frame),
+          y + _max(0, top - frame),
+          room.origin.z,
+        ),
+        Vec3(
+          room.origin.x + _min(size.x, u1 + frame),
+          y + top,
+          room.origin.z + depth,
+        ),
+        frameColor,
+      );
+      _box(
+        builder,
+        Vec3(room.origin.x + u0, y, room.origin.z),
+        Vec3(room.origin.x + u1, y + 0.05, room.origin.z + depth),
+        frameColor,
+      );
+    case Facing.south:
+      _box(
+        builder,
+        Vec3(
+          room.origin.x + _max(0, u0 - frame),
+          y,
+          room.origin.z + size.z - depth,
+        ),
+        Vec3(room.origin.x + u0, y + top, room.origin.z + size.z),
+        frameColor,
+      );
+      _box(
+        builder,
+        Vec3(room.origin.x + u1, y, room.origin.z + size.z - depth),
+        Vec3(
+          room.origin.x + _min(size.x, u1 + frame),
+          y + top,
+          room.origin.z + size.z,
+        ),
+        frameColor,
+      );
+      _box(
+        builder,
+        Vec3(
+          room.origin.x + _max(0, u0 - frame),
+          y + _max(0, top - frame),
+          room.origin.z + size.z - depth,
+        ),
+        Vec3(
+          room.origin.x + _min(size.x, u1 + frame),
+          y + top,
+          room.origin.z + size.z,
+        ),
+        frameColor,
+      );
+      _box(
+        builder,
+        Vec3(room.origin.x + u0, y, room.origin.z + size.z - depth),
+        Vec3(room.origin.x + u1, y + 0.05, room.origin.z + size.z),
+        frameColor,
+      );
+    case Facing.east:
+      _box(
+        builder,
+        Vec3(
+          room.origin.x + size.x - depth,
+          y,
+          room.origin.z + _max(0, u0 - frame),
+        ),
+        Vec3(room.origin.x + size.x, y + top, room.origin.z + u0),
+        frameColor,
+      );
+      _box(
+        builder,
+        Vec3(room.origin.x + size.x - depth, y, room.origin.z + u1),
+        Vec3(
+          room.origin.x + size.x,
+          y + top,
+          room.origin.z + _min(size.z, u1 + frame),
+        ),
+        frameColor,
+      );
+      _box(
+        builder,
+        Vec3(
+          room.origin.x + size.x - depth,
+          y + _max(0, top - frame),
+          room.origin.z + _max(0, u0 - frame),
+        ),
+        Vec3(
+          room.origin.x + size.x,
+          y + top,
+          room.origin.z + _min(size.z, u1 + frame),
+        ),
+        frameColor,
+      );
+      _box(
+        builder,
+        Vec3(room.origin.x + size.x - depth, y, room.origin.z + u0),
+        Vec3(room.origin.x + size.x, y + 0.05, room.origin.z + u1),
+        frameColor,
+      );
+    case Facing.west:
+      _box(
+        builder,
+        Vec3(room.origin.x, y, room.origin.z + _max(0, u0 - frame)),
+        Vec3(room.origin.x + depth, y + top, room.origin.z + u0),
+        frameColor,
+      );
+      _box(
+        builder,
+        Vec3(room.origin.x, y, room.origin.z + u1),
+        Vec3(
+          room.origin.x + depth,
+          y + top,
+          room.origin.z + _min(size.z, u1 + frame),
+        ),
+        frameColor,
+      );
+      _box(
+        builder,
+        Vec3(
+          room.origin.x,
+          y + _max(0, top - frame),
+          room.origin.z + _max(0, u0 - frame),
+        ),
+        Vec3(
+          room.origin.x + depth,
+          y + top,
+          room.origin.z + _min(size.z, u1 + frame),
+        ),
+        frameColor,
+      );
+      _box(
+        builder,
+        Vec3(room.origin.x, y, room.origin.z + u0),
+        Vec3(room.origin.x + depth, y + 0.05, room.origin.z + u1),
+        frameColor,
+      );
+  }
+  // Legacy geometry still receives the complete door in `RoomGeometry.doors`;
+  // Pixeldart extracts the leaf through [buildDoorLeafGeometry] instead.
+  if (includeLeaf) _addDoorLeaf(builder, room, size, portal, frameColor);
+  _addDoorHardware(builder, room, size, portal);
+}
+
+int _doorFrameColor(Portal portal) =>
+    portal.doorKit == 'kit-front-door-recessed'
+    ? 0x4D3024
+    : portal.doorKit == 'kit-cellar-door-grille'
+    ? 0x57534A
+    : 0x6A5141;
+
+void _addDoorHardware(
+  StaticMeshBuilder builder,
+  Room room,
+  Vec3 size,
+  Portal portal,
+) {
+  final u0 = portal.offsetFor(room.id);
+  final u1 = u0 + portal.width;
+  final handleU = u0 + portal.width * 0.72;
+  final handleY = _min(size.y - 0.34, _min(portal.height, 1.02));
+  final facing = portal.facingFor(room.id);
+  const iron = 0x3E3A35;
+  const brass = 0x8A7442;
+  const escutcheon = 0x6E5B32;
+  const keyholeColor = 0x1A1814;
+
+  // Bevelled Escutcheon Plate
+  _wallBox(
+    builder,
+    room,
+    size,
+    facing,
+    _max(0, handleU - 0.045),
+    _min(
+      facing == Facing.north || facing == Facing.south ? size.x : size.z,
+      handleU + 0.045,
+    ),
+    _max(0.12, handleY - 0.08),
+    _min(size.y - 0.05, handleY + 0.08),
+    0.165,
+    escutcheon,
+  );
+
+  // Door Handle / Lever Knob
+  _wallBox(
+    builder,
+    room,
+    size,
+    facing,
+    _max(0, handleU - 0.035),
+    _min(
+      facing == Facing.north || facing == Facing.south ? size.x : size.z,
+      handleU + 0.035,
+    ),
+    _max(0.12, handleY - 0.035),
+    _min(size.y - 0.05, handleY + 0.035),
+    0.18,
+    brass,
+  );
+
+  // Keyhole Slot Detail
+  _wallBox(
+    builder,
+    room,
+    size,
+    facing,
+    _max(0, handleU - 0.01),
+    _min(
+      facing == Facing.north || facing == Facing.south ? size.x : size.z,
+      handleU + 0.01,
+    ),
+    _max(0.12, handleY - 0.065),
+    _min(size.y - 0.05, handleY - 0.045),
+    0.168,
+    keyholeColor,
+  );
+
+  // Security Chain Slider Rail for Front Door
+  if (portal.doorKit == 'kit-front-door-recessed') {
+    _wallBox(
+      builder,
+      room,
+      size,
+      facing,
+      _max(0, handleU - 0.22),
+      _min(
+        facing == Facing.north || facing == Facing.south ? size.x : size.z,
+        handleU + 0.02,
+      ),
+      _max(0.12, handleY + 0.25),
+      _min(size.y - 0.05, handleY + 0.29),
+      0.17,
+      brass,
+    );
+  }
+
+  final hingeU = portal.hingeAtStart ? u0 + 0.11 : u1 - 0.11;
+  final hingeHeight = _min(size.y - 0.20, _min(portal.height, size.y));
+  for (final hingeY in [0.46, hingeHeight * 0.50, hingeHeight - 0.46]) {
+    if (hingeY <= 0.12 || hingeY >= size.y - 0.08) continue;
+    _wallBox(
+      builder,
+      room,
+      size,
+      facing,
+      _max(0, hingeU - 0.026),
+      _min(
+        facing == Facing.north || facing == Facing.south ? size.x : size.z,
+        hingeU + 0.026,
+      ),
+      hingeY - 0.075,
+      hingeY + 0.075,
+      0.11,
+      iron,
+    );
+  }
+  if (portal.doorKit == 'kit-front-door-recessed') {
+    _wallBox(
+      builder,
+      room,
+      size,
+      facing,
+      u0 + 0.08,
+      _max(u0 + 0.10, u1 - 0.08),
+      0.16,
+      0.25,
+      0.13,
+      iron,
+    );
+    _wallBox(
+      builder,
+      room,
+      size,
+      facing,
+      u0 + portal.width * 0.34,
+      u0 + portal.width * 0.66,
+      _min(size.y - 0.36, 1.46),
+      _min(size.y - 0.30, 1.52),
+      0.15,
+      0x8B7655,
+    );
+  }
+}
+
+void _addDoorLeaf(
+  StaticMeshBuilder builder,
+  Room room,
+  Vec3 size,
+  Portal portal,
+  int color,
+) {
+  final facing = portal.facingFor(room.id);
+  final u0 = portal.offsetFor(room.id);
+  final y = room.origin.y;
+  final h = _min(size.y, portal.height);
+  const leafThickness = 0.055;
+  if (portal.open) {
+    // A passable door is modelled swung into the room from its hinge edge.
+    switch (facing) {
+      case Facing.north:
+        _box(
+          builder,
+          Vec3(room.origin.x + u0, y, room.origin.z),
+          Vec3(
+            room.origin.x + u0 + leafThickness,
+            y + h,
+            room.origin.z + portal.width,
+          ),
+          color,
+        );
+      case Facing.south:
+        _box(
+          builder,
+          Vec3(room.origin.x + u0, y, room.origin.z + size.z - portal.width),
+          Vec3(
+            room.origin.x + u0 + leafThickness,
+            y + h,
+            room.origin.z + size.z,
+          ),
+          color,
+        );
+      case Facing.east:
+        _box(
+          builder,
+          Vec3(room.origin.x + size.x - portal.width, y, room.origin.z + u0),
+          Vec3(
+            room.origin.x + size.x,
+            y + h,
+            room.origin.z + u0 + leafThickness,
+          ),
+          color,
+        );
+      case Facing.west:
+        _box(
+          builder,
+          Vec3(room.origin.x, y, room.origin.z + u0),
+          Vec3(
+            room.origin.x + portal.width,
+            y + h,
+            room.origin.z + u0 + leafThickness,
+          ),
+          color,
+        );
+    }
+  } else {
+    switch (facing) {
+      case Facing.north:
+        _box(
+          builder,
+          Vec3(room.origin.x + u0, y, room.origin.z),
+          Vec3(
+            room.origin.x + u0 + portal.width,
+            y + h,
+            room.origin.z + leafThickness,
+          ),
+          color,
+        );
+      case Facing.south:
+        _box(
+          builder,
+          Vec3(room.origin.x + u0, y, room.origin.z + size.z - leafThickness),
+          Vec3(
+            room.origin.x + u0 + portal.width,
+            y + h,
+            room.origin.z + size.z,
+          ),
+          color,
+        );
+      case Facing.east:
+        _box(
+          builder,
+          Vec3(room.origin.x + size.x - leafThickness, y, room.origin.z + u0),
+          Vec3(
+            room.origin.x + size.x,
+            y + h,
+            room.origin.z + u0 + portal.width,
+          ),
+          color,
+        );
+      case Facing.west:
+        _box(
+          builder,
+          Vec3(room.origin.x, y, room.origin.z + u0),
+          Vec3(
+            room.origin.x + leafThickness,
+            y + h,
+            room.origin.z + u0 + portal.width,
+          ),
+          color,
+        );
+    }
+  }
+}
+
+final class _Opening {
+  final double u0, u1, v0, v1;
+
+  const _Opening(this.u0, this.u1, this.v0, this.v1);
+
+  bool contains(double u, double v) => u > u0 && u < u1 && v > v0 && v < v1;
+}
+
+final class _Span {
+  final double u0;
+  final double u1;
+
+  const _Span(this.u0, this.u1);
+}

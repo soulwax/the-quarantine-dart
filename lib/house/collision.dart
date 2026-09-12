@@ -332,3 +332,43 @@ class _ActiveStair {
 
   _ActiveStair(this.stair, this.progress);
 }
+
+/// Category of architectural physical boundary.
+enum CollisionHullKind {
+  solidBox,
+  obstacleBox,
+  stepPlane,
+  slopedCeiling,
+}
+
+/// Physical collision hull synthesized by the architectural system.
+class ArchitecturalCollisionHull {
+  final String id;
+  final String roomId;
+  final CollisionHullKind kind;
+  final Vec3 min;
+  final Vec3 max;
+  final double stepHeight;
+
+  const ArchitecturalCollisionHull({
+    required this.id,
+    required this.roomId,
+    required this.kind,
+    required this.min,
+    required this.max,
+    this.stepHeight = 0.0,
+  });
+
+  /// Evaluates whether a capsule with given base, tip, and radius collides with this hull.
+  bool collidesWithCapsule(Vec3 base, Vec3 tip, double radius) {
+    final closestX = ((base.x + tip.x) * 0.5).clamp(min.x, max.x);
+    final closestY = ((base.y + tip.y) * 0.5).clamp(min.y, max.y);
+    final closestZ = ((base.z + tip.z) * 0.5).clamp(min.z, max.z);
+
+    final dx = (base.x + tip.x) * 0.5 - closestX;
+    final dy = (base.y + tip.y) * 0.5 - closestY;
+    final dz = (base.z + tip.z) * 0.5 - closestZ;
+
+    return (dx * dx + dy * dy + dz * dz) < (radius * radius);
+  }
+}

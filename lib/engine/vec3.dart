@@ -6,6 +6,7 @@ class Vec3 {
 
   Vec3 operator +(Vec3 o) => Vec3(x + o.x, y + o.y, z + o.z);
   Vec3 operator -(Vec3 o) => Vec3(x - o.x, y - o.y, z - o.z);
+  Vec3 operator -() => Vec3(-x, -y, -z);
   Vec3 operator *(double s) => Vec3(x * s, y * s, z * s);
 
   double dot(Vec3 o) => x * o.x + y * o.y + z * o.z;
