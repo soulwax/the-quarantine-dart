@@ -23,6 +23,7 @@ void main() {
     'high shadow maps must match the runtime shadow-map budget',
   );
   check(high.shadowMapSize == 1024, 'high shadow map size');
+  check(high.sampleCount == 2, 'high auto antialiasing requests 2x MSAA');
   final highMsaa4 = policy.configuration(
     profile: pixeldart.QualityProfile.clean,
     surfaceWidth: 1920,
@@ -53,6 +54,12 @@ void main() {
     standard.shadowMapCount == pixeldart.RuntimeLightBudget.shadowMaps,
     'standard shadow maps must match the runtime shadow-map budget',
   );
+  check(
+    standard.sampleCount == 1,
+    'standard auto antialiasing must not request MSAA -- this is the tier a '
+    'software rasterizer gets capped to, and a flat 2x here would silently '
+    'undo that cap',
+  );
 
   final safe = policy.configuration(
     profile: pixeldart.QualityProfile.safe,
@@ -62,6 +69,7 @@ void main() {
   check(safe.internalWidth == 800, 'safe internal width');
   check(safe.internalHeight == 450, 'safe internal height');
   check(safe.shadowMapCount == 0, 'safe has no shadows');
+  check(safe.sampleCount == 1, 'safe auto antialiasing must not request MSAA');
   final shadowsOff = policy.configuration(
     profile: pixeldart.QualityProfile.clean,
     surfaceWidth: 1920,

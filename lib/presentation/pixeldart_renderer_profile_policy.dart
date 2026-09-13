@@ -61,10 +61,16 @@ final class PixeldartRendererProfilePolicy {
     };
     // MSAA is a target allocation choice, not a post feature toggle. The
     // safe graph can still resolve a requested sample count when hardware
-    // negotiation permits it.
+    // negotiation permits it — an explicit msaa2/msaa4 request is honoured at
+    // every tier. 'auto' is the one branch that must track the negotiated
+    // profile like shadowSize and the capacity fields below already do:
+    // CapabilityProfileSelector caps software rasterizers (SwiftShader,
+    // llvmpipe) to standard precisely because they cannot resolve an MSAA
+    // target at real-time rates, and a flat 2x here would silently undo that.
     final sampleCount = switch (antialiasing) {
       'msaa4' => 4,
-      'msaa2' || 'auto' => 2,
+      'msaa2' => 2,
+      'auto' => isHigh ? 2 : 1,
       _ => 1,
     };
     return pixeldart.RendererConfiguration(
