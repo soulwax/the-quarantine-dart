@@ -25,7 +25,7 @@ String mimeTypeFor(String path) {
 }
 
 Future<void> handleRequest(HttpRequest request, Directory root) async {
-  var relativePath = request.uri.path;
+  var relativePath = Uri.decodeComponent(request.uri.path);
   if (relativePath == '/') relativePath = '/index.html';
   final target = File('${root.path}/${relativePath.substring(1)}');
 
