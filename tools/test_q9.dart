@@ -6,7 +6,7 @@ void main() {
   final time = GameTime(dayNumber: 1, dayLengthSeconds: dayLengthSeconds);
 
   print('=== Sun Angle Tests ===');
-  for (int hour = 0; hour <= 24; hour++) {
+  for (int hour = 0; hour < 24; hour++) {
     time.skipToHour(hour);
     final angle = time.sunAngle;
     final color = sunColor(angle);

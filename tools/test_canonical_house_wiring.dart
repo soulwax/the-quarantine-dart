@@ -69,10 +69,10 @@ void main() {
     throw StateError('Architectural plan has errors: ${plan.validationErrors}');
   }
   final placed = h1.placedModels;
-  if (placed.length != 30) {
-    throw StateError('Expected 30 placed model instances, got ${placed.length}');
+  if (placed.length != 80) {
+    throw StateError('Expected 80 placed model instances, got ${placed.length}');
   }
-  print('  -> 30 placed models verified across all 10 architectural programs');
+  print('  -> 80 placed models verified across all 10 architectural programs');
 
   // 6. Direct geometry helpers on House
   print('\n[6/7] Verifying house geometry synthesis delegates...');

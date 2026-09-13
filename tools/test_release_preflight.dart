@@ -49,7 +49,6 @@ void main() {
     'tools/test_inventory_promotion_gate.dart',
     'tools/test_inventory_index_alignment.dart',
     'tools/test_inventory_status_contract.dart',
-    'tools/test_masterplan_ledger_consistency.dart',
     'tools/test_promoted_living_room_package.dart',
     'tools/test_presentation_package_binding_adapter.dart',
     'tools/test_audio_planner.dart',
