@@ -1,0 +1,20 @@
+{
+  "schema": "pixeldart-asset-source-v1",
+  "assetId": "living-room",
+  "status": "normalized-runtime-package",
+  "license": "OWNER_AUTHORED_SOURCE",
+  "licenseId": "owner-authored-fbx-room-source",
+  "source": {
+    "name": "InteriorTest.fbx",
+    "sha256": "383a2269f797231bd38d5ab04d1bab685c0526b43b2cb920442d91b85bd96359",
+    "format": "fbx",
+    "offlineOnly": true
+  },
+  "runtimePackage": {
+    "format": "normalized-glb-qmsh",
+    "path": "web/res/models/living-room/manifest.json",
+    "packageSha256": "dd4916f99c4eb04ccc1e22d4eb12a36300a5e115996bd2100502e93b81bbda8e",
+    "sourceFormat": "glb",
+    "note": "The browser ships the normalized runtime package; the raw FBX remains offline-only."
+  }
+}

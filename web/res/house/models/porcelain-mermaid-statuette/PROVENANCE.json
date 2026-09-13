@@ -1,0 +1,60 @@
+{
+  "schema": "pixeldart-asset-source-v1",
+  "assetId": "porcelain-mermaid-statuette",
+  "status": "source-only",
+  "license": "OWNER_AUTHORED_SOURCE",
+  "licenseId": "owner-authored-porcelain-source",
+  "sourceArchive": {
+    "name": "porcelain-mermaid-statuette/source/Retopo.zip",
+    "sha256": "ae3bce47fe7a46f242144a256e3b304474a2f94ef1c732c91f9dfe26ea528b0b"
+  },
+  "source": {
+    "model": {
+      "path": "source/Retopo/Retopo.OBJ",
+      "sha256": "156ffab0ccd6494615daef6f7b485464cfd02e074a533e08baf366f79f58a097",
+      "format": "obj",
+      "faces": 37099,
+      "trianglesAfterFanTriangulation": 74197,
+      "vertices": 37181
+    },
+    "rawBounds": {
+      "min": [-44.578457, -43.055336, -37.448204],
+      "max": [38.062477, 56.571133, 49.926159],
+      "candidateScaleToMetres": 0.01,
+      "scaleStatus": "pending-artist-confirmation"
+    },
+    "albedo": {
+      "path": "textures/retopo_Transferred Texture from Mesh.jpeg",
+      "sha256": "b44f90f9a9e4f59d75ac4c5d5028e3b24390a7acda40b2cabaa2c380d4406b1e",
+      "width": 8192,
+      "height": 8192,
+      "expectedMipLevels": 14,
+      "colorSpace": "srgb"
+    },
+    "normal": {
+      "path": "textures/retopo_Normal Map from Mesh.jpeg",
+      "sha256": "f8f83a845a38174be12e4a1a78e0175cd60a97ad66cc9db6aa323471a38696af",
+      "width": 8192,
+      "height": 8192,
+      "expectedMipLevels": 14,
+      "colorSpace": "linear"
+    }
+  },
+  "runtimePackage": {
+    "format": "glTF-2.0-or-qmsh-v2",
+    "path": null,
+    "packageSha256": null,
+    "maxTextureDimension": 4096,
+    "expectedRuntimeMipLevels": 13,
+    "lods": null,
+    "note": "Do not submit the raw OBJ or 8192px maps to the browser. Generate and validate the runtime package offline first."
+  },
+  "material": {
+    "family": "porcelain-clearcoat",
+    "metallic": 0.0,
+    "roughness": 0.28,
+    "clearcoatStrength": 0.72,
+    "clearcoatRoughness": 0.18,
+    "normalStrength": 0.72
+  }
+}

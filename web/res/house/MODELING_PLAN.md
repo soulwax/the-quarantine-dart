@@ -204,6 +204,19 @@ socket uniqueness and route-safe margins. The catalog intentionally points at
 future normalized model paths and declares `room-fixture` proxies, so the current
 authored fixture mesh remains the visual fallback until those models are imported.
 
+The lived-in packet now covers two rugs, a hall runner, ration tin and ration
+book, bread, enamel mug and bowl, firewood basket, table lamp, coat hooks, and
+kitchen jars. These are deliberately small, inspectable or story-supporting
+objects: they add occupancy and period texture without narrowing the authored
+movement corridors. Their source paths are briefs for normalized model import,
+not claims that binary production assets have already landed.
+
+The second lived-in packet adds a newspaper, tea service, mail bundle, gloves,
+potato sack, kettle, coal shovel, folded blanket, soap dish, and knitting
+basket. Together the two packets make domestic routines legible in the living
+room, hall, kitchen, cellar, bedroom, bathroom, and spare room without turning
+every surface into noise.
+
 The furniture packet adds six larger silhouettes: a living armchair and
 sideboard, bedroom washstand, landing bench, bathroom stool, and spare-room
 sewing table. Each has a normalized source brief plus a deterministic proxy in
@@ -398,6 +411,22 @@ the content-addressed source cache.
   dust occlusion. Every mark must have a plausible cause.
 
 ### Shader and texture packing contract
+
+The current proxy house has a house-owned surface binding manifest at
+`assets/house/materials.json` (mirrored under `web/res/house/`). It is the
+interim bridge between canonical room surface IDs and the renderer's existing
+texture keys: every wall, floor, and ceiling variant records its texture key,
+display tint, roughness intent, and target UV repeat. `lib/house/geometry.dart`
+uses the tint and UV density immediately, while Pixeldart remains responsible
+for texture handles and future normal/ORM/source-map expansion. Do not add a
+second room-material mapping in the renderer or silently invent a texture key;
+promote a variant here first and validate it with `tools/test_house_materials.dart`.
+
+Spatial resizing follows the same rule: change the authored and presentation
+factors in `lib/house/scale_profile.dart`, update the manifest `modelScale`
+mirrors, and run the house contract suite. Spawn anchors, exterior dimensions,
+wall thickness, inventory scale validation, and room geometry consume that
+profile; do not hand-edit a second runtime scale constant.
 
 - Preserve linear data for roughness, metalness, AO, normal and height; colour
   textures use sRGB. Never gamma-correct packed data channels.
